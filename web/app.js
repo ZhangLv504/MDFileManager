@@ -1,4 +1,4 @@
-/* MDFileManager 前端：文档树 + 目录选中 + 分类新建 + Markdown 渲染（含公式）+ 编辑保存。
+/* MDFileManager 前端：顶层目录卡片视图 + 侧栏树 + 右键重命名 + 目录说明 + Markdown 渲染。
  * 纯静态 JS，通过 Fetch 调用后端 JSON API，无任何构建步骤。
  * 渲染链：marked（含公式扩展）→ DOMPurify 净化 → Vue v-html → highlight.js / KaTeX 装饰。 */
 (function () {
@@ -54,6 +54,19 @@
     try { window.history.replaceState(null, '', suffix); } catch (error) { /* 忽略 */ }
   }
 
+  function sortNodes(nodes) {
+    return (nodes || []).slice().sort(function (a, b) {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+  }
+
+  function countFiles(nodes) {
+    return (nodes || []).reduce(function (total, node) {
+      return total + (node.type === 'file' ? 1 : countFiles(node.children));
+    }, 0);
+  }
+
   async function api(method, url, body) {
     var options = { method: method, headers: {} };
     if (body !== undefined) {
@@ -79,13 +92,34 @@
       expanded: { type: Object, required: true },
       depth: { type: Number, default: 0 }
     },
-    emits: ['select', 'select-dir', 'toggle'],
+    emits: ['select', 'select-dir', 'toggle', 'context'],
     template: '#tree-node-tpl',
     methods: {
       onClick: function () {
         if (this.node.type === 'dir') this.$emit('select-dir', this.node.path);
         else this.$emit('select', this.node.path);
-      }
+      },
+      onContext: function (event) { this.$emit('context', event, this.node); }
+    }
+  };
+
+  var CardItem = {
+    name: 'CardItem',
+    props: {
+      node: { type: Object, required: true },
+      expanded: { type: Object, required: true }
+    },
+    emits: ['select', 'dir', 'context'],
+    template: '#card-item-tpl',
+    computed: {
+      sortedChildren: function () { return sortNodes(this.node.children); }
+    },
+    methods: {
+      onClick: function () {
+        if (this.node.type === 'dir') this.$emit('dir', this.node);
+        else this.$emit('select', this.node.path);
+      },
+      onContext: function (event) { this.$emit('context', event, this.node); }
     }
   };
 
@@ -94,6 +128,7 @@
       return {
         tree: [],
         expanded: {},
+        cardExpanded: {},
         selectedDir: '',
         currentPath: '',
         content: '',
@@ -105,22 +140,36 @@
         showNew: false,
         newKind: 'dir',
         newName: '',
+        contextMenu: null,
+        showRename: false,
+        renameName: '',
+        renameTarget: { path: '', name: '', type: 'dir' },
+        showDescription: false,
+        descriptionText: '',
+        descriptionTarget: '',
         noticeTimer: null,
         keyHandler: null,
-        hashHandler: null
+        hashHandler: null,
+        docClickHandler: null
       };
     },
 
     computed: {
       renderedHtml: function () { return renderMarkdown(this.content); },
       dirty: function () { return this.content !== this.original; },
-      docCount: function () {
-        function count(nodes) {
-          return nodes.reduce(function (total, node) {
-            return total + (node.type === 'file' ? 1 : count(node.children || []));
-          }, 0);
-        }
-        return count(this.tree);
+      docCount: function () { return countFiles(this.tree); },
+      topCards: function () {
+        return this.tree.filter(function (node) { return node.type === 'dir'; })
+          .map(function (dir) {
+            return {
+              name: dir.name,
+              path: dir.path,
+              description: (dir.description || '').trim(),
+              total: countFiles(dir.children),
+              items: sortNodes(dir.children),
+              node: dir
+            };
+          });
       },
       newLocation: function () {
         return this.selectedDir ? this.selectedDir + '/' : 'data/（顶层）';
@@ -130,7 +179,7 @@
       },
       newHint: function () {
         if (!this.selectedDir) {
-          return '未选中目录时只能创建顶层目录。点击左侧目录名可选中它，之后即可创建子目录或 .md 文档。';
+          return '未选中目录时只能创建顶层目录。点击目录名或卡片内的文件夹可选中它。';
         }
         return this.newKind === 'dir'
           ? '将在选中目录下创建子目录，创建后会自动选中新目录。'
@@ -152,8 +201,10 @@
         }
       };
       this.hashHandler = function () { self.openFromHash(); };
+      this.docClickHandler = function () { self.closeContextMenu(); };
       window.addEventListener('keydown', this.keyHandler);
       window.addEventListener('hashchange', this.hashHandler);
+      document.addEventListener('click', this.docClickHandler);
       this.checkHealth();
       this.refreshTree().then(function () { self.openFromHash(); });
     },
@@ -161,6 +212,7 @@
     beforeUnmount: function () {
       window.removeEventListener('keydown', this.keyHandler);
       window.removeEventListener('hashchange', this.hashHandler);
+      document.removeEventListener('click', this.docClickHandler);
       clearTimeout(this.noticeTimer);
     },
 
@@ -227,6 +279,107 @@
       clearSelectedDir: function () {
         this.selectedDir = '';
         setHash('dir', '');
+      },
+
+      onCardDir: function (node) {
+        this.cardExpanded[node.path] = !this.cardExpanded[node.path];
+        this.selectedDir = node.path;
+        this.expanded[node.path] = true;
+        setHash('dir', node.path);
+      },
+
+      openContextMenu: function (event, node) {
+        if (!node || !node.path) return;
+        this.contextMenu = {
+          x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
+          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
+          node: node
+        };
+      },
+
+      closeContextMenu: function () { this.contextMenu = null; },
+
+      startRename: function () {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.renameTarget = { path: node.path, name: node.name, type: node.type };
+        this.renameName = node.name;
+        this.closeContextMenu();
+        this.showRename = true;
+        var self = this;
+        Vue.nextTick(function () {
+          if (self.$refs.renameInput) {
+            self.$refs.renameInput.focus();
+            self.$refs.renameInput.select();
+          }
+        });
+      },
+
+      startDescriptionFromMenu: function () {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.closeContextMenu();
+        this.openDescription({ path: node.path, description: node.description || '' });
+      },
+
+      rewritePaths: function (oldPath, newPath) {
+        var prefix = oldPath + '/';
+        if (this.currentPath === oldPath) {
+          this.currentPath = newPath;
+          setHash('doc', newPath);
+        } else if (this.currentPath.indexOf(prefix) === 0) {
+          this.currentPath = newPath + this.currentPath.slice(oldPath.length);
+          setHash('doc', this.currentPath);
+        }
+        if (this.selectedDir === oldPath) {
+          this.selectedDir = newPath;
+          setHash('dir', newPath);
+        } else if (this.selectedDir.indexOf(prefix) === 0) {
+          this.selectedDir = newPath + this.selectedDir.slice(oldPath.length);
+          setHash('dir', this.selectedDir);
+        }
+        if (Object.prototype.hasOwnProperty.call(this.cardExpanded, oldPath)) {
+          this.cardExpanded[newPath] = this.cardExpanded[oldPath];
+        }
+      },
+
+      submitRename: async function () {
+        var name = this.renameName.trim();
+        if (!name) { this.notify('请输入新名称', 'error'); return; }
+        if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1
+            || name.indexOf('..') !== -1 || name.charAt(0) === '.') {
+          this.notify('名称不能包含路径分隔符、.. 或以点开头', 'error');
+          return;
+        }
+        if (this.renameTarget.type === 'file' && !/\.md$/i.test(name)) name += '.md';
+        var oldPath = this.renameTarget.path;
+        try {
+          var result = await api('PATCH', '/api/rename', { path: oldPath, new_name: name });
+          this.showRename = false;
+          this.rewritePaths(oldPath, result.path);
+          await this.refreshTree();
+          this.notify(result.renamed ? '重命名成功' : '名称未变化', 'success');
+        } catch (error) {
+          this.notify('重命名失败：' + error.message, 'error');
+        }
+      },
+
+      openDescription: function (card) {
+        this.descriptionTarget = card.path;
+        this.descriptionText = card.description || '';
+        this.showDescription = true;
+      },
+
+      submitDescription: async function () {
+        try {
+          await api('PUT', '/api/descriptions/' + encodePath(this.descriptionTarget),
+            { content: this.descriptionText });
+          this.showDescription = false;
+          await this.refreshTree();
+          this.notify('目录说明已保存', 'success');
+        } catch (error) {
+          this.notify('保存说明失败：' + error.message, 'error');
+        }
       },
 
       confirmDiscard: function () {
@@ -297,10 +450,7 @@
 
       createEntry: async function () {
         var name = this.newName.trim();
-        if (!name) {
-          this.notify('请输入名称', 'error');
-          return;
-        }
+        if (!name) { this.notify('请输入名称', 'error'); return; }
         if (name.indexOf('..') !== -1 || name.indexOf('/') !== -1 || name.indexOf('\\') !== -1
             || name === '.' || name.charAt(0) === '.') {
           this.notify('名称不能包含路径分隔符、.. 或以点开头', 'error');
@@ -349,5 +499,6 @@
   });
 
   app.component('tree-node', TreeNode);
+  app.component('card-item', CardItem);
   app.mount('#app');
 })();

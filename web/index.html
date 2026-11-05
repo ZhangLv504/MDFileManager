@@ -42,16 +42,44 @@
         <button type="button" title="取消选择" @click="clearSelectedDir">×</button>
       </div>
       <div class="tree" v-if="tree.length">
-        <tree-node v-for="node in tree" :key="node.path" :node="node" :current="currentPath" :selected-dir="selectedDir" :expanded="expanded" :depth="0" @select="selectDoc" @select-dir="selectDir" @toggle="toggleNode"></tree-node>
+        <tree-node v-for="node in tree" :key="node.path" :node="node" :current="currentPath" :selected-dir="selectedDir" :expanded="expanded" :depth="0" @select="selectDoc" @select-dir="selectDir" @toggle="toggleNode" @context="openContextMenu"></tree-node>
       </div>
       <div class="tree-empty" v-else>暂无文档，点击「新建」创建目录。</div>
-      <div class="side-foot">点击目录名可选中它；点箭头仅展开/折叠。<br>数据目录：<code>data/</code> · 同名保存即覆盖更新</div>
+      <div class="side-foot">点击目录名选中，点箭头展开/折叠。<br>右键文档或目录可重命名。</div>
     </aside>
 
     <main class="main">
       <div class="notice" v-if="notice" :class="notice.type">{{ notice.text }}</div>
 
-      <div class="editor-split" v-if="editing && currentPath">
+      <div class="cards-view" v-if="!currentPath">
+        <div class="cards-head">
+          <div>
+            <h2>顶层目录</h2>
+            <p>卡片展示目录名称、作用说明与其内容；目录在前，文档在后。</p>
+          </div>
+          <span class="cards-count">{{ topCards.length }} 个目录 · {{ docCount }} 篇文档</span>
+        </div>
+        <div class="cards">
+          <section class="card" v-for="card in topCards" :key="card.path">
+            <header class="card-head" @contextmenu.prevent="openContextMenu($event, card.node)">
+              <div class="card-title">
+                <span class="card-icon">▣</span>
+                <h3 :title="card.path">{{ card.name }}</h3>
+                <span class="card-count">{{ card.total }} 篇</span>
+              </div>
+              <button type="button" class="card-edit" title="编辑说明" @click.stop="openDescription(card)">编辑说明</button>
+            </header>
+            <p class="card-desc" :class="{ empty: !card.description }">{{ card.description || '暂无说明，点击「编辑说明」补充这个分类的用途。' }}</p>
+            <div class="card-items">
+              <card-item v-for="item in card.items" :key="item.path" :node="item" :expanded="cardExpanded" @select="selectDoc" @dir="onCardDir" @context="openContextMenu"></card-item>
+            </div>
+            <div class="card-empty" v-if="!card.items.length">目录为空，选中它后可新建子目录或文档。</div>
+          </section>
+        </div>
+        <div class="cards-tip">卡片与卡片内部条目均为流式布局；卡片内的文件夹仍是普通目录，可继续展开。</div>
+      </div>
+
+      <div class="editor-split" v-else-if="editing">
         <section class="pane">
           <div class="pane-head"><span>Markdown 源码</span><span class="dirty" v-if="dirty">未保存</span></div>
           <textarea v-model="content" spellcheck="false" placeholder="# 开始写作"></textarea>
@@ -62,17 +90,17 @@
         </section>
       </div>
 
-      <div class="viewer" v-else-if="currentPath">
+      <div class="viewer" v-else>
         <article class="markdown-body" v-html="renderedHtml"></article>
       </div>
-
-      <div class="placeholder" v-else>
-        <div class="placeholder-mark">MD</div>
-        <h2>从左侧选择一篇文档</h2>
-        <p>点击目录名选中它，再点「新建」可创建子目录或 Markdown 文档。</p>
-        <p class="hint">未选中目录时，「新建」只会创建顶层目录。</p>
-      </div>
     </main>
+  </div>
+
+  <div class="context-menu" v-if="contextMenu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" @click.stop>
+    <div class="ctx-title">{{ contextMenu.node.name }}</div>
+    <button type="button" @click="startRename">重命名</button>
+    <button type="button" v-if="contextMenu.node.type === 'dir'" @click="startDescriptionFromMenu">编辑说明</button>
+    <button type="button" @click="closeContextMenu">取消</button>
   </div>
 
   <div class="dialog-mask" v-if="showNew" @click.self="showNew = false">
@@ -91,19 +119,57 @@
       </div>
     </div>
   </div>
+
+  <div class="dialog-mask" v-if="showRename" @click.self="showRename = false">
+    <div class="dialog">
+      <h3>重命名{{ renameTarget.type === 'dir' ? '目录' : '文档' }}</h3>
+      <p>原名称：<code>{{ renameTarget.name }}</code></p>
+      <input ref="renameInput" v-model="renameName" @keyup.enter="submitRename" placeholder="输入新名称">
+      <div class="dialog-hint">文档名需以 .md 结尾（省略会自动补全）；目录名不能以 .md 结尾。只改名，不移动位置。</div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showRename = false">取消</button>
+        <button class="btn primary" @click="submitRename">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showDescription" @click.self="showDescription = false">
+    <div class="dialog">
+      <h3>编辑目录说明</h3>
+      <p>目录：<code>{{ descriptionTarget }}</code></p>
+      <textarea v-model="descriptionText" rows="5" placeholder="这个分类用来放什么内容？"></textarea>
+      <div class="dialog-hint">说明保存在该目录的 <code>.description.md</code> 中，不会出现在文档列表里。</div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showDescription = false">取消</button>
+        <button class="btn primary" @click="submitDescription">保存</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script type="text/x-template" id="tree-node-tpl">
   <div class="tree-node">
-    <div class="tree-row" :class="{ dir: node.type === 'dir', active: current === node.path, 'dir-active': node.type === 'dir' && selectedDir === node.path }" :style="{ paddingLeft: (10 + depth * 14) + 'px' }" @click="onClick">
+    <div class="tree-row" :class="{ dir: node.type === 'dir', active: current === node.path, 'dir-active': node.type === 'dir' && selectedDir === node.path }" :style="{ paddingLeft: (10 + depth * 14) + 'px' }" @click="onClick" @contextmenu.prevent="onContext">
       <span class="twisty" v-if="node.type === 'dir'" @click.stop="$emit('toggle', node.path)">{{ expanded[node.path] ? '▾' : '▸' }}</span>
       <span class="bullet" v-else>·</span>
       <span class="name" :title="node.path">{{ node.name }}</span>
       <span class="size" v-if="node.type === 'file'">{{ node.size }} B</span>
     </div>
     <template v-if="node.type === 'dir' && expanded[node.path]">
-      <tree-node v-for="child in node.children" :key="child.path" :node="child" :current="current" :selected-dir="selectedDir" :expanded="expanded" :depth="depth + 1" @select="$emit('select', $event)" @select-dir="$emit('select-dir', $event)" @toggle="$emit('toggle', $event)"></tree-node>
+      <tree-node v-for="child in node.children" :key="child.path" :node="child" :current="current" :selected-dir="selectedDir" :expanded="expanded" :depth="depth + 1" @select="$emit('select', $event)" @select-dir="$emit('select-dir', $event)" @toggle="$emit('toggle', $event)" @context="(event, target) => $emit('context', event, target)"></tree-node>
     </template>
+  </div>
+</script>
+
+<script type="text/x-template" id="card-item-tpl">
+  <div class="card-branch">
+    <button type="button" class="chip" :class="node.type" @click="onClick" @contextmenu.prevent.stop="onContext">
+      <span class="chip-mark">{{ node.type === 'dir' ? (expanded[node.path] ? '▾' : '▸') : '·' }}</span>{{ node.name }}
+    </button>
+    <div class="chip-children" v-if="node.type === 'dir' && expanded[node.path]">
+      <card-item v-for="child in sortedChildren" :key="child.path" :node="child" :expanded="expanded" @select="$emit('select', $event)" @dir="$emit('dir', $event)" @context="(event, target) => $emit('context', event, target)"></card-item>
+      <span class="chip-empty" v-if="!sortedChildren.length">空目录</span>
+    </div>
   </div>
 </script>
 

@@ -182,9 +182,9 @@ def main() -> int:
         dom_dir = dump_dom(browser, profile_dir, dir_url, "目录深链接")
         check("目录深链接自动选中目录", "已选目录" in dom_dir and "Projects" in dom_dir)
         check("选中目录在树中高亮", "dir-active" in dom_dir)
-        check("侧栏给出目录选中与新建提示", "点击目录名可选中它" in dom_dir)
+        check("侧栏给出目录选中与右键提示", "右键文档或目录可重命名" in dom_dir)
         check("顶栏新建按钮可用", ">新建<" in dom_dir)
-        check("未选中文档时展示引导占位", "从左侧选择一篇文档" in dom_dir)
+        check("未选中文档时展示顶层目录卡片", "顶层目录" in dom_dir and "card-desc" in dom_dir)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

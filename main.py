@@ -28,6 +28,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = (BASE_DIR / "data").resolve()
 DEFAULT_CATEGORIES = ("Projects", "Knowledge")
 MAX_DOC_BYTES = 5 * 1024 * 1024
+MAX_DESCRIPTION_BYTES = 20 * 1024
+DESCRIPTION_CHARS = 500
+DESCRIPTION_FILE = ".description.md"
 MAX_NAME_BYTES = 200
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
@@ -54,7 +57,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.1.0",
+    version="1.2.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -66,38 +69,43 @@ app.add_middleware(
 )
 
 
+def _validate_segment(part: str) -> str:
+    """校验单段名称，重命名与路径解析共用同一套规则。"""
+    if part in ("", ".", ".."):
+        raise _bad_request("名称中包含非法段（空段 / . / ..）")
+    if "/" in part or "\\" in part:
+        raise _bad_request("名称不能包含路径分隔符")
+    if _FORBIDDEN_CHARS.search(part):
+        raise _bad_request("名称中包含非法字符")
+    if part != part.strip() or part.endswith(".") or part.startswith("."):
+        raise _bad_request("名称不能以空格、点开头或结尾")
+    if len(part.encode("utf-8")) > MAX_NAME_BYTES:
+        raise _bad_request("名称过长")
+    if part.split(".")[0].upper() in _WINDOWS_RESERVED:
+        raise _bad_request("名称属于系统保留字")
+    return part
+
+
 def _parse_relative_path(
-    raw_path: str, *, require_md: bool, min_parts: int, label: str
+    raw_path: str, *, md_rule: str = "any", min_parts: int = 1, label: str = "路径"
 ) -> tuple[Path, str]:
     """把 'Projects/子目录/文档.md' 解析为 (绝对路径, 相对 data/ 的 posix 路径)。
 
     任何可能越出 data/ 的路径都在此被拒绝：空段、`.`、`..`、绝对路径、
     盘符、非法字符、隐藏文件、系统保留名，以及符号链接逃逸。
+    md_rule: require=必须是 .md；forbid=禁止 .md；any=不限制。
     """
     if not raw_path or "\x00" in raw_path:
         raise _bad_request(f"{label}路径不能为空")
     if raw_path.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", raw_path):
         raise _bad_request("不接受绝对路径或盘符路径")
 
-    parts: list[str] = []
-    for part in raw_path.split("/"):
-        if part in ("", ".", ".."):
-            raise _bad_request("路径中包含非法段（空段 / . / ..）")
-        if _FORBIDDEN_CHARS.search(part):
-            raise _bad_request("路径中包含非法字符")
-        if part != part.strip() or part.endswith(".") or part.startswith("."):
-            raise _bad_request("名称不能以空格、点开头或结尾")
-        if len(part.encode("utf-8")) > MAX_NAME_BYTES:
-            raise _bad_request("名称过长")
-        if part.split(".")[0].upper() in _WINDOWS_RESERVED:
-            raise _bad_request("名称属于系统保留字")
-        parts.append(part)
-
+    parts = [_validate_segment(part) for part in raw_path.split("/")]
     if len(parts) < min_parts:
         raise _bad_request("路径必须包含分类目录与文件名，例如 Projects/说明.md")
-    if require_md and not parts[-1].lower().endswith(".md"):
+    if md_rule == "require" and not parts[-1].lower().endswith(".md"):
         raise _bad_request("仅支持 .md 文件")
-    if not require_md and parts[-1].lower().endswith(".md"):
+    if md_rule == "forbid" and parts[-1].lower().endswith(".md"):
         raise _bad_request("目录名不应以 .md 结尾")
 
     rel = Path(*parts)
@@ -110,15 +118,29 @@ def _parse_relative_path(
 
 
 def _parse_doc_path(doc_path: str) -> tuple[Path, str]:
-    return _parse_relative_path(doc_path, require_md=True, min_parts=2, label="文档")
+    return _parse_relative_path(doc_path, md_rule="require", min_parts=2, label="文档")
 
 
 def _parse_dir_path(dir_path: str) -> tuple[Path, str]:
-    return _parse_relative_path(dir_path, require_md=False, min_parts=1, label="目录")
+    return _parse_relative_path(dir_path, md_rule="forbid", min_parts=1, label="目录")
+
+
+def _parse_entry_path(entry_path: str) -> tuple[Path, str]:
+    return _parse_relative_path(entry_path, md_rule="any", min_parts=1, label="条目")
 
 
 def _iso_time(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+
+
+def _read_description(directory: Path) -> str:
+    desc_file = directory / DESCRIPTION_FILE
+    if not desc_file.is_file():
+        return ""
+    try:
+        return desc_file.read_text(encoding="utf-8")[:DESCRIPTION_CHARS]
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _scan(directory: Path, rel: Path) -> list[dict[str, Any]]:
@@ -144,6 +166,7 @@ def _scan(directory: Path, rel: Path) -> list[dict[str, Any]]:
                 "name": entry.name,
                 "path": entry_rel.as_posix(),
                 "type": "dir",
+                "description": _read_description(entry),
                 "children": _scan(entry, entry_rel),
             })
         elif entry.is_file() and entry.suffix.lower() == ".md":
@@ -161,8 +184,44 @@ def _scan(directory: Path, rel: Path) -> list[dict[str, Any]]:
     return nodes
 
 
+def _atomic_write(target: Path, data: bytes) -> None:
+    """同目录临时文件 + 原子替换，避免产生半截文件。"""
+    tmp_name = ""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=".mdfm-", suffix=".tmp", dir=str(target.parent)
+        )
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, target)
+        tmp_name = ""
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"写入失败：{exc}",
+        ) from exc
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
 class DocPayload(BaseModel):
     content: str = Field(..., description="Markdown 源码，UTF-8 文本")
+
+
+class RenamePayload(BaseModel):
+    path: str = Field(..., description="现有文档或目录的相对路径")
+    new_name: str = Field(..., description="新名称，不含路径分隔符")
+
+
+class DescriptionPayload(BaseModel):
+    content: str = Field(..., description="目录作用说明文本")
 
 
 @app.get("/api/health", summary="健康检查")
@@ -174,7 +233,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.get("/api/tree", summary="获取 data/ 目录的树形结构")
+@app.get("/api/tree", summary="获取 data/ 目录树（目录节点含说明文字）")
 def get_tree() -> dict[str, Any]:
     return {
         "root": "data",
@@ -201,6 +260,69 @@ def create_dir(dir_path: str) -> dict[str, Any]:
             detail=f"创建目录失败：{exc}",
         ) from exc
     return {"path": rel, "created": True}
+
+
+@app.patch("/api/rename", summary="重命名文档或目录（只改名，不移动位置）")
+def rename_entry(payload: RenamePayload) -> dict[str, Any]:
+    target, rel = _parse_entry_path(payload.path)
+    if not target.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"条目不存在：{rel}")
+    if target.is_symlink():
+        raise _bad_request("不支持重命名符号链接")
+    is_file = target.is_file()
+    if not is_file and not target.is_dir():
+        raise _bad_request("目标既不是文件也不是目录")
+
+    name = _validate_segment(payload.new_name.strip())
+    if is_file and not name.lower().endswith(".md"):
+        raise _bad_request("文档名必须以 .md 结尾")
+    if not is_file and name.lower().endswith(".md"):
+        raise _bad_request("目录名不应以 .md 结尾")
+
+    new_target = target.parent / name
+    try:
+        new_target.resolve().relative_to(DATA_ROOT)
+    except ValueError:
+        raise _bad_request("路径越出 data/ 根目录")
+    if new_target == target:
+        return {
+            "old_path": rel, "path": rel,
+            "type": "file" if is_file else "dir", "renamed": False,
+        }
+    if new_target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="同目录下已存在同名文件或目录",
+        )
+    try:
+        target.rename(new_target)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重命名失败：{exc}",
+        ) from exc
+    new_rel = (Path(rel).parent / name).as_posix()
+    return {
+        "old_path": rel,
+        "path": new_rel,
+        "type": "file" if is_file else "dir",
+        "renamed": True,
+    }
+
+
+@app.put("/api/descriptions/{dir_path:path}", summary="写入目录作用说明（.description.md）")
+def save_description(dir_path: str, payload: DescriptionPayload) -> dict[str, Any]:
+    target, rel = _parse_dir_path(dir_path)
+    if not target.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"目录不存在：{rel}")
+    data = payload.content.encode("utf-8")
+    if len(data) > MAX_DESCRIPTION_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"说明超过 {MAX_DESCRIPTION_BYTES // 1024} KB 上限",
+        )
+    _atomic_write(target / DESCRIPTION_FILE, data)
+    return {"path": rel, "size": len(data)}
 
 
 @app.get("/api/docs/{doc_path:path}", summary="读取指定 MD 文件的源码")
@@ -241,32 +363,7 @@ def save_doc(doc_path: str, payload: DocPayload) -> dict[str, Any]:
             status_code=status.HTTP_409_CONFLICT,
             detail="目标路径不是文件",
         )
-
-    # 先写同目录临时文件再原子替换，避免保存过程中产生半截文件。
-    tmp_name = ""
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=".mdfm-", suffix=".tmp", dir=str(target.parent)
-        )
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, target)
-        tmp_name = ""
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"写入失败：{exc}",
-        ) from exc
-    finally:
-        if tmp_name and os.path.exists(tmp_name):
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-
+    _atomic_write(target, data)
     return {
         "path": rel,
         "action": "updated" if existed else "created",
