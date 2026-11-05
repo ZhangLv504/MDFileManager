@@ -1,4 +1,4 @@
-"""阶段二可运行结果验证：静态页面、渲染依赖、API 联动与 Markdown 渲染输出。
+"""阶段二/三可运行结果验证：静态页面、渲染依赖、公式扩展、API 联动与 Markdown 输出。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/frontend_smoke_test.py
@@ -21,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
 STATIC_ASSETS = (
     "/app.js",
+    "/math.js",
     "/style.css",
     "/vendor/vue.global.prod.js",
     "/vendor/marked.min.js",
@@ -28,6 +29,9 @@ STATIC_ASSETS = (
     "/vendor/highlight.min.js",
     "/vendor/highlight-light.css",
     "/vendor/github-markdown-light.css",
+    "/vendor/katex/katex.min.js",
+    "/vendor/katex/katex.min.css",
+    "/vendor/katex/fonts/KaTeX_Main-Regular.woff2",
 )
 TEST_DOC = "Projects/__frontend__渲染验证.md"
 
@@ -101,11 +105,13 @@ def main() -> int:
 
     node_path = shutil.which("node")
     if node_path:
-        result = subprocess.run(
-            [node_path, "--check", str(WEB_DIR / "app.js")],
-            capture_output=True, text=True,
-        )
-        check("app.js 通过 Node 语法检查", result.returncode == 0, result.stderr[:300])
+        for script in ("app.js", "math.js"):
+            result = subprocess.run(
+                [node_path, "--check", str(WEB_DIR / script)],
+                capture_output=True, text=True,
+            )
+            check(f"{script} 通过 Node 语法检查", result.returncode == 0, result.stderr[:300])
+
         render_probe = r"""
 const marked = require(process.argv[1]);
 const out = marked.parse('# 标题\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```python\nprint(1)\n```\n');
@@ -120,6 +126,27 @@ console.log('rendered');
         )
         check("marked 正确输出标题、表格与代码块 HTML", probe.returncode == 0,
               (probe.stdout + probe.stderr)[:300])
+
+        math_probe = r"""
+const root = process.argv[1];
+const marked = require(root + '/web/vendor/marked.min.js');
+const katex = require(root + '/web/vendor/katex/katex.min.js');
+const math = require(root + '/web/math.js');
+const renderer = math.install(marked, katex);
+const src = '# 标题\n\n行内 $E=mc^2$\n\n$$\n\\int_0^1 x^2 dx = \\frac{1}{3}\n$$\n\n```python\nprice = $5\n```\n';
+renderer.reset();
+const out = marked.parse(src);
+if ((out.match(/math-placeholder/g) || []).length !== 2) process.exit(2);
+if (!out.includes('$5') || !out.includes('<h1')) process.exit(3);
+if (!katex.renderToString('E=mc^2').includes('katex')) process.exit(4);
+console.log('math-ok');
+"""
+        math_result = subprocess.run(
+            [node_path, "-e", math_probe, str(BASE_DIR)],
+            capture_output=True, text=True,
+        )
+        check("公式扩展识别行内/块级公式且不误伤代码块", math_result.returncode == 0,
+              (math_result.stdout + math_result.stderr)[:300])
     else:
         print("[SKIP] 未安装 Node.js，跳过前端语法与渲染探针")
 
@@ -140,11 +167,12 @@ console.log('rendered');
               f"-> {code} {content_type}")
         check("页面挂载 Vue 文档树与 v-html 渲染区",
               "<tree-node" in index_html and 'v-html="renderedHtml"' in index_html)
-        check("页面引用标准解析库与 Markdown 样式表",
-              "vendor/marked.min.js" in index_html
-              and "vendor/purify.min.js" in index_html
-              and "vendor/highlight.min.js" in index_html
-              and "github-markdown-light.css" in index_html)
+        check("页面引用标准解析库、样式表与 KaTeX",
+              all(token in index_html for token in (
+                  "vendor/marked.min.js", "vendor/purify.min.js",
+                  "vendor/highlight.min.js", "github-markdown-light.css",
+                  "vendor/katex/katex.min.js", "vendor/katex/katex.min.css", "/math.js",
+              )))
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -155,6 +183,9 @@ console.log('rendered');
         check("交互逻辑使用标准解析库并做 XSS 净化",
               "marked.parse" in app_js and "DOMPurify.sanitize" in app_js
               and "hljs.highlightElement" in app_js)
+        check("交互逻辑接入 KaTeX 公式渲染与文档深链接",
+              "MDFMMath.install" in app_js and "renderInto" in app_js
+              and "openFromHash" in app_js)
         check("交互逻辑调用 Fetch 完成无刷新保存",
               "fetch(" in app_js and "'PUT'" in app_js and "refreshTree()" in app_js)
 

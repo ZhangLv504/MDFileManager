@@ -136,3 +136,6 @@ body {
 .dialog input:focus { border-color: var(--accent); }
 .dialog-hint { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .dialog-actions { margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px; }
+
+.markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
+.markdown-body .math-placeholder { color: var(--muted); }

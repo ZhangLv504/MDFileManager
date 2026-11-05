@@ -1,5 +1,6 @@
-/* MDFileManager 阶段二前端：文档树 + Markdown 高保真渲染 + 编辑保存。
- * 纯静态 JS，通过 Fetch 调用阶段一的 JSON API，无任何构建步骤。 */
+/* MDFileManager 前端：文档树 + Markdown 高保真渲染（含数学公式）+ 编辑保存。
+ * 纯静态 JS，通过 Fetch 调用阶段一的 JSON API，无任何构建步骤。
+ * 渲染链：marked（含公式扩展）→ DOMPurify 净化 → Vue v-html → highlight.js / KaTeX 装饰。 */
 (function () {
   'use strict';
 
@@ -17,7 +18,13 @@
     window.marked.setOptions({ gfm: true, breaks: false });
   }
 
+  var mathRenderer = null;
+  if (window.MDFMMath && window.marked && window.katex) {
+    mathRenderer = window.MDFMMath.install(window.marked, window.katex);
+  }
+
   function renderMarkdown(source) {
+    if (mathRenderer) mathRenderer.reset();
     var raw = parseMarkdown(source || '');
     return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
   }
@@ -30,8 +37,21 @@
     });
   }
 
+  function decorate() {
+    highlightAll();
+    if (!mathRenderer) return;
+    document.querySelectorAll('.markdown-body').forEach(function (root) {
+      mathRenderer.renderInto(root);
+    });
+  }
+
   function encodeDocPath(path) {
     return String(path).split('/').map(encodeURIComponent).join('/');
+  }
+
+  function setDocHash(path) {
+    var suffix = path ? '#/doc/' + encodeURIComponent(path) : window.location.pathname;
+    try { window.history.replaceState(null, '', suffix); } catch (error) { /* 忽略 */ }
   }
 
   async function api(method, url, body) {
@@ -83,7 +103,8 @@
         showNew: false,
         newPath: 'Projects/新文档.md',
         noticeTimer: null,
-        keyHandler: null
+        keyHandler: null,
+        hashHandler: null
       };
     },
 
@@ -101,8 +122,8 @@
     },
 
     watch: {
-      renderedHtml: function () { Vue.nextTick(highlightAll); },
-      editing: function () { Vue.nextTick(highlightAll); }
+      renderedHtml: function () { Vue.nextTick(decorate); },
+      editing: function () { Vue.nextTick(decorate); }
     },
 
     mounted: function () {
@@ -113,13 +134,16 @@
           self.saveDoc();
         }
       };
+      this.hashHandler = function () { self.openFromHash(); };
       window.addEventListener('keydown', this.keyHandler);
+      window.addEventListener('hashchange', this.hashHandler);
       this.checkHealth();
-      this.refreshTree();
+      this.refreshTree().then(function () { self.openFromHash(); });
     },
 
     beforeUnmount: function () {
       window.removeEventListener('keydown', this.keyHandler);
+      window.removeEventListener('hashchange', this.hashHandler);
       clearTimeout(this.noticeTimer);
     },
 
@@ -160,6 +184,14 @@
         }
       },
 
+      openFromHash: function () {
+        var hash = window.location.hash || '';
+        if (hash.indexOf('#/doc/') !== 0) return;
+        var path;
+        try { path = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
+        if (path && path !== this.currentPath) this.selectDoc(path);
+      },
+
       confirmDiscard: function () {
         if (!this.dirty) return true;
         return window.confirm('当前文档有未保存的修改，确定放弃吗？');
@@ -174,6 +206,7 @@
           this.content = data.content;
           this.original = data.content;
           this.editing = false;
+          setDocHash(data.path);
         } catch (error) {
           this.notify('读取失败：' + error.message, 'error');
         }
@@ -206,6 +239,7 @@
           this.content = '';
           this.original = '';
           this.editing = false;
+          setDocHash('');
           this.notify('文档已删除', 'success');
           await this.refreshTree();
         } catch (error) {
@@ -244,6 +278,7 @@
           this.content = initial;
           this.original = initial;
           this.editing = true;
+          setDocHash(result.path);
           await this.refreshTree();
           this.notify('文档已创建，可直接编辑', 'success');
         } catch (error) {

@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）的文档补充 + 阶段三渲染增强 `stage-3-render-enhancement`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -11,7 +11,8 @@
 | 项 | 版本 | 说明 |
 | --- | --- | --- |
 | Python | **3.12.7** | 项目指定版本，本机通过 `py -3.12` 选择（`E:\Software\Python3127\python.exe`） |
-| Node.js | v22.22.2（可选） | **仅**用于开发期校验 `web/app.js` 语法与 marked 渲染输出，项目运行不需要 |
+| Node.js | v22.22.2（可选） | **仅**用于开发期的 `node --check` 语法校验、marked / KaTeX 渲染探针，以及 `npm pack` 下载 KaTeX；项目运行不需要 |
+| Chrome / Edge | 系统自带（可选） | **仅**用于 `tests/browser_smoke_test.py` 的真实无头浏览器验证；不下载浏览器，项目运行不需要 |
 | 浏览器 | 现代浏览器 | 访问前端页面，无需构建工具、无需联网 |
 | 操作系统 | Windows | 命令示例为 Git Bash 风格 |
 
@@ -111,7 +112,11 @@ websockets==17.4
 
 ## 三、前端本地化库（`web/vendor/`）
 
-这些库**不是 pip / npm install 安装的**，而是从 jsDelivr 下载后随仓库提交，目的是让页面在**完全离线**环境下也能正确渲染 Markdown。开发时执行的下载命令如下（在 `web/vendor/` 目录内）：
+这些库**不是 pip install 安装的**，而是从 jsDelivr 下载、或从 npm 发行包中取出后随仓库提交，目的是让页面在**完全离线**环境下也能正确渲染 Markdown 与公式。项目本体不需要 Node.js、npm 或构建步骤。
+
+### 3.1 基础渲染库（jsDelivr 下载）
+
+开发时执行的命令（在 `web/vendor/` 目录内）：
 
 ```bash
 mkdir -p web/vendor && cd web/vendor
@@ -124,6 +129,26 @@ curl -fsSL -o highlight-light.css         "https://cdn.jsdelivr.net/npm/@highlig
 curl -fsSL -o github-markdown-light.css   "https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown-light.css"
 ```
 
+### 3.2 数学公式库 KaTeX（npm 发行包）
+
+KaTeX 除 JS/CSS 外还依赖一批字体文件，逐个用 curl 下载很繁琐，因此用 `npm pack` 取整包后只保留需要的文件：
+
+```bash
+mkdir -p /tmp/mdfm-katex && cd /tmp/mdfm-katex
+npm pack katex@0.16.22 --silent
+tar -xzf katex-0.16.22.tgz
+
+# 回到项目根目录后执行
+mkdir -p web/vendor/katex/fonts
+cp /tmp/mdfm-katex/package/dist/katex.min.js  web/vendor/katex/
+cp /tmp/mdfm-katex/package/dist/katex.min.css web/vendor/katex/
+cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
+```
+
+> 本机 npm registry 指向 `registry.npmmirror.com` 镜像。只保留 20 个 `woff2`（约 296 KB）：现代浏览器会优先使用 CSS 中排在首位的 woff2，不会去请求同目录的 woff / ttf 备用格式。
+
+### 3.3 库清单与作用
+
 | 文件 | 库 / 版本 | 作用 |
 | --- | --- | --- |
 | `vue.global.prod.js` | Vue **3.5.44** | 视图层框架（含模板编译器的全局构建版）。负责递归文档树组件、响应式状态、新建/编辑/保存等交互；无需打包工具。 |
@@ -131,9 +156,13 @@ curl -fsSL -o github-markdown-light.css   "https://cdn.jsdelivr.net/npm/github-m
 | `purify.min.js` | DOMPurify **3.4.17** | 净化 marked 输出的 HTML，过滤脚本与危险属性，防止文档内容引发 XSS。 |
 | `highlight.min.js` | highlight.js **11.12.0** | 对 `pre code` 代码块做语法高亮（`hljs.highlightElement`）。 |
 | `github-markdown-light.css` | github-markdown-css **5.9.0** | GitHub 风格 Markdown 排版样式，保证标题、表格、引用、间距、字体正确。 |
-| `highlight-light.css` | highlight.js **11.12.0** 的 github 主题 | 代码高亮配色（浅色），配合上面的 Markdown 样式使用。 |
+| `highlight-light.css` | highlight.js **11.12.0** 的 github 主题 | 代码高亮配色（浅色）。 |
+| `katex/katex.min.js` | KaTeX **0.16.22** | 把 LaTeX 公式渲染成 HTML + CSS，支持行内 `$...$` 与块级 `$$...$$`。 |
+| `katex/katex.min.css` | KaTeX **0.16.22** | 公式排版样式，引用同目录 `fonts/*.woff2`。 |
+| `katex/fonts/*.woff2` | KaTeX **0.16.22**，20 个文件 | 数学符号与字形字体，离线渲染公式必需。 |
+| `../math.js`（项目自写，非第三方） | — | 为 marked 注册公式扩展：先把公式换成占位 `span`，等 DOMPurify 净化、Vue 挂载后再由 KaTeX 原地填充，避免 marked 的反斜杠转义破坏公式。 |
 
-引用顺序见 `web/index.html`：先加载 4 个 JS 库，最后加载 `web/app.js`；渲染链为 **marked → DOMPurify → highlight.js**。
+引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。
 
 ---
 
@@ -169,6 +198,7 @@ py -3.12 -m venv .venv
 | 地址 | 用途 |
 | --- | --- |
 | `http://127.0.0.1:8000/` | 前端页面：文档树、Markdown 渲染、编辑与保存 |
+| `http://127.0.0.1:8000/#/doc/分类%2F文档.md` | 文档深链接，打开即自动选中并渲染指定文档（路径需 URL 编码） |
 | `http://127.0.0.1:8000/docs` | Swagger UI，可直接测试四个后端接口 |
 | `http://127.0.0.1:8000/api/health` | 健康检查，返回 `data/` 路径与基础分类 |
 | `http://127.0.0.1:8000/api/tree` | `data/` 目录树 JSON |
@@ -179,11 +209,12 @@ py -3.12 -m venv .venv
 ### 4.3 验证是否正常运行
 
 ```bash
-.venv/Scripts/python.exe tests/smoke_test.py            # 阶段一：25/25 项通过
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 阶段二：22/22 项通过
+.venv/Scripts/python.exe tests/smoke_test.py            # 阶段一后端：25/25
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 阶段二/三 HTTP 层：29/29
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染：13/13
 ```
 
-两个脚本会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档，**不需要先手动启动服务**。若装有 Node.js，第二个脚本还会额外做 `app.js` 语法检查与 marked 渲染输出探针。
+三个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档，**不需要先手动启动服务**。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，验证 Vue 挂载、文档树、表格、代码高亮与 KaTeX 公式的真实渲染结果，不下载浏览器。
 
 ### 4.4 关键目录
 
@@ -195,18 +226,24 @@ MDFileManager/
 │   ├── Projects/
 │   └── Knowledge/
 ├── web/                    # 纯静态前端
-│   ├── index.html / app.js / style.css
+│   ├── index.html
+│   ├── app.js              # 交互逻辑（Fetch / 树 / 编辑 / 深链接）
+│   ├── math.js             # marked 公式扩展 + KaTeX 填充
+│   ├── style.css
 │   └── vendor/             # 已本地化的前端库
-├── tests/                  # 两个阶段的可运行验证脚本
+│       ├── vue / marked / DOMPurify / highlight.js / github-markdown-css
+│       └── katex/          # katex.min.js、katex.min.css、fonts/*.woff2
+├── tests/                  # 三个可运行验证脚本
 └── Doc/                    # 需求、协作约定、进度与本指南
 ```
 
 ### 4.5 常见情况
 
 - **端口被占用**：换端口 `--port 8001`，或简写启动时设置 `MDFM_PORT=8001`。
-- **换机器 / 依赖缺失**：重新执行 `py -3.12 -m venv .venv` 与 `pip install -r requirements.txt`；`.venv/` 被 `.gitignore` 忽略，不随仓库分发。
-- **离线使用**：前端库已全部放在 `web/vendor/`，启动与渲染都无需联网；只有首次安装 Python 依赖时需要网络。
+- **换机器 / 依赖缺失**：重新执行 `py -3.12 -m venv .venv` 与 `pip install -r requirements.txt`；`.venv/` 被 `.gitignore` 忽略，不随仓库分发。前端库已随仓库提交，无需重新安装。
+- **离线使用**：前端库（含 KaTeX 字体）全部本地化，启动与渲染都无需联网；只有首次安装 Python 依赖时需要网络。
 - **新增文档**：页面点「新建」，填 `分类/文件名.md`（如 `Knowledge/前端/渲染说明.md`），父目录会自动创建；同名保存即覆盖更新。
+- **分享文档**：选中文档后地址栏会带上 `#/doc/...`，复制该链接即可让别人直接打开同一篇文档。
 - **数据备份**：直接复制 `data/` 目录即可，没有数据库。
 
 ---
@@ -216,10 +253,12 @@ MDFileManager/
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
 | 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI，`tests/smoke_test.py` 25/25 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css（均为本地静态文件） | 文档树 + 高保真渲染编辑器，`tests/frontend_smoke_test.py` 22/22 |
-| 开发期校验（可选） | Node.js | `node --check web/app.js`、marked 渲染探针 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css（均为本地静态文件） | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 29/29 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式渲染 + URL 深链接 + 真实浏览器验证 13/13 |
+| 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
-## 六、尚未接入的部分
+## 六、当前能力边界
 
-- README 提到的**数学公式渲染**未实现，需要时再引入 KaTeX（JS + CSS + 字体）并加入渲染链。
-- 前端尚未做真实浏览器自动化验证，现有验证覆盖 HTTP 层、静态资源、JS 语法与渲染引擎输出。
+- 公式支持行内 `$...$` 与块级 `$$...$$`；代码块中的 `$` 不解析；KaTeX 以 `throwOnError: false` 渲染，非法公式保留原文不中断页面。
+- 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时该脚本返回失败，但前两个脚本与项目本身不受影响。
+- 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。
