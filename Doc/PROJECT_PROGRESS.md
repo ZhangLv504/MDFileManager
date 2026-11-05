@@ -86,7 +86,7 @@
 - 后端 `DELETE /api/dirs/{path}`（仅空目录、非空 409、清理隐藏占位文件）；前端右键菜单扩展与目录页快捷新建/删除入口。
 - 四套验证全绿：`tests/smoke_test.py` **40/40**、`tests/frontend_smoke_test.py` **39/39**、`tests/browser_smoke_test.py` **23/23**、`tests/stage5_smoke_test.py` **37/37**。
 
-### 阶段九 · 内容整理（`stage-9-content-organize`）
+### 阶段九 · 内容整理（`stage-9-content-organize`，提交 `2e6fb24`）
 - 后端 `PATCH /api/move` 与 `DELETE /api/dirs/{path}?recursive=true&confirm=...`；前端移动到对话框、原生拖放整理、递归删除二次确认与路径自动同步。
 - 四套验证全绿：`tests/smoke_test.py` **65/65**、`tests/frontend_smoke_test.py` **47/47**、`tests/browser_smoke_test.py` **27/27**、`tests/stage5_smoke_test.py` **52/52**。
 
