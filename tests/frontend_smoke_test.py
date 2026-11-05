@@ -185,6 +185,12 @@ console.log('math-ok');
               "dir-view" in index_html and "breadcrumb" in index_html
               and "goBack" in index_html and "← 返回" in index_html
               and '@dblclick="openDir(item.path)"' in index_html)
+        check("右键菜单提供打开/新建/删除等操作",
+              "openFromMenu" in index_html and "startNewInMenu" in index_html
+              and "deleteFromMenu" in index_html and "删除目录" in index_html)
+        check("目录页提供新建文件夹与文档快捷入口",
+              "createIn(activeDirPath, 'dir')" in index_html
+              and "createIn(activeDirPath, 'doc')" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)

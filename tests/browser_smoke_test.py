@@ -188,6 +188,7 @@ def main() -> int:
         check("目录页给出双击与右键提示", "双击文件夹进入下一级" in dom_dir)
         check("顶栏新建按钮可用", ">新建<" in dom_dir)
         check("目录页以文档分区展示内容", "dir-view" in dom_dir and "doc-tile" in dom_dir)
+        check("目录页提供新建快捷按钮", "+ 文件夹" in dom_dir and "+ 文档" in dom_dir)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

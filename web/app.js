@@ -314,6 +314,73 @@
 
       closeContextMenu: function () { this.contextMenu = null; },
 
+      openFromMenu: function () {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.closeContextMenu();
+        if (node.type === 'dir') this.openDir(node.path);
+        else this.selectDoc(node.path);
+      },
+
+      startNewInMenu: function (kind) {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.closeContextMenu();
+        this.createIn(node.path, kind);
+      },
+
+      createIn: function (dirPath, kind) {
+        if (!dirPath || !this.confirmDiscard()) return;
+        this.selectedDir = dirPath;
+        this.newKind = kind || 'dir';
+        this.newName = '';
+        this.showNew = true;
+        var self = this;
+        Vue.nextTick(function () {
+          if (self.$refs.newNameInput) self.$refs.newNameInput.focus();
+        });
+      },
+
+      deleteFromMenu: async function () {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.closeContextMenu();
+        var label = node.type === 'dir' ? '目录' : '文档';
+        var warning = node.type === 'dir'
+          ? '仅空目录可删除，且会一并清理目录说明。'
+          : '此操作不可撤销。';
+        if (!window.confirm('确定删除' + label + '「' + node.name + '」吗？' + warning)) return;
+        var url = node.type === 'dir'
+          ? '/api/dirs/' + encodePath(node.path)
+          : '/api/docs/' + encodePath(node.path);
+        try {
+          await api('DELETE', url);
+          if (node.type === 'file' && this.currentPath === node.path) {
+            this.currentPath = '';
+            this.content = '';
+            this.original = '';
+            this.editing = false;
+            if (this.activeDirPath) setHash('dir', this.activeDirPath);
+            else setHash('doc', '');
+          }
+          if (node.type === 'dir' && this.activeDirPath
+              && (this.activeDirPath === node.path
+                  || this.activeDirPath.indexOf(node.path + '/') === 0)) {
+            var parts = node.path.split('/');
+            if (parts.length > 1) this.openDir(parts.slice(0, -1).join('/'));
+            else this.goToCards();
+          }
+          if (this.selectedDir === node.path
+              || this.selectedDir.indexOf(node.path + '/') === 0) {
+            this.selectedDir = '';
+          }
+          await this.refreshTree();
+          this.notify(label + '已删除', 'success');
+        } catch (error) {
+          this.notify('删除失败：' + error.message, 'error');
+        }
+      },
+
       startRename: function () {
         if (!this.contextMenu) return;
         var node = this.contextMenu.node;

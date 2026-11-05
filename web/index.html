@@ -80,6 +80,8 @@
         </nav>
         <div class="dir-title-row">
           <h2>{{ activeDirNode ? activeDirNode.name : activeDirPath }}</h2>
+          <button class="btn" @click="createIn(activeDirPath, 'dir')">+ 文件夹</button>
+          <button class="btn" @click="createIn(activeDirPath, 'doc')">+ 文档</button>
           <button class="btn" @click="openDescription({ path: activeDirPath, description: activeDirNode ? activeDirNode.description : '' })">编辑说明</button>
         </div>
         <p class="dir-desc" :class="{ empty: !activeDescription }">{{ activeDescription || '这个目录还没有说明。' }}</p>
@@ -138,8 +140,15 @@
 
   <div class="context-menu" v-if="contextMenu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" @click.stop>
     <div class="ctx-title">{{ contextMenu.node.name }}</div>
+    <button type="button" @click="openFromMenu">{{ contextMenu.node.type === 'dir' ? '打开目录' : '打开文档' }}</button>
     <button type="button" @click="startRename">重命名</button>
-    <button type="button" v-if="contextMenu.node.type === 'dir'" @click="startDescriptionFromMenu">编辑说明</button>
+    <template v-if="contextMenu.node.type === 'dir'">
+      <button type="button" @click="startNewInMenu('dir')">在此新建文件夹</button>
+      <button type="button" @click="startNewInMenu('doc')">在此新建文档</button>
+      <button type="button" @click="startDescriptionFromMenu">编辑说明</button>
+    </template>
+    <div class="ctx-sep"></div>
+    <button type="button" class="danger" @click="deleteFromMenu">{{ contextMenu.node.type === 'dir' ? '删除目录' : '删除文档' }}</button>
     <button type="button" @click="closeContextMenu">取消</button>
   </div>
 

@@ -262,6 +262,45 @@ def create_dir(dir_path: str) -> dict[str, Any]:
     return {"path": rel, "created": True}
 
 
+@app.delete("/api/dirs/{dir_path:path}", summary="删除空目录（一并清理隐藏占位文件）")
+def delete_dir(dir_path: str) -> dict[str, Any]:
+    target, rel = _parse_dir_path(dir_path)
+    if not target.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"目录不存在：{rel}")
+    try:
+        visible = [item for item in target.iterdir() if not item.name.startswith(".")]
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取目录失败：{exc}",
+        ) from exc
+    if visible:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"目录非空，仍有 {len(visible)} 个子项，请先清空其中的文档或子目录",
+        )
+    removed: list[str] = []
+    for name in (".gitkeep", DESCRIPTION_FILE):
+        hidden = target / name
+        if hidden.is_file():
+            try:
+                hidden.unlink()
+                removed.append(name)
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"清理占位文件失败：{exc}",
+                ) from exc
+    try:
+        target.rmdir()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除目录失败：{exc}",
+        ) from exc
+    return {"path": rel, "deleted": True, "removed_files": removed}
+
+
 @app.patch("/api/rename", summary="重命名文档或目录（只改名，不移动位置）")
 def rename_entry(payload: RenamePayload) -> dict[str, Any]:
     target, rel = _parse_entry_path(payload.path)

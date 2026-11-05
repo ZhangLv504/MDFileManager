@@ -240,6 +240,16 @@ def main() -> int:
                         {"path": RENAMED_DIR, "new_name": "像文档.md"})
         check("重命名拒绝目录使用 .md 名称", code == 400, f"-> {code}")
 
+        empty_del_dir = "Projects/__stage5__空目录"
+        code, _ = fetch(base_url, "/api/dirs/" + quote(empty_del_dir), "POST")
+        check("准备一个空目录", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/dirs/" + quote(empty_del_dir), "DELETE")
+        deleted = as_json(raw)
+        check("删除空目录接口可用", code == 200 and deleted
+              and deleted.get("deleted") is True, f"-> {code} {raw[:120]}")
+        code, _ = fetch(base_url, "/api/dirs/" + quote(RENAMED_DIR), "DELETE")
+        check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
+
         browser = find_browser()
         if browser:
             print(f"使用浏览器：{browser}")

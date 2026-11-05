@@ -169,6 +169,18 @@ def main() -> int:
         code, _ = client.call("POST", "/api/dirs/Projects/__smoke__bad.md")
         check("目录接口拒绝以 .md 结尾的目录名", code == 400, f"-> {code}")
 
+        empty_dir = "Projects/__smoke__待删目录"
+        enc_empty = urllib.parse.quote(empty_dir, safe="/")
+        code, _ = client.call("POST", f"/api/dirs/{enc_empty}")
+        check("准备一个空目录", code == 200, f"-> {code}")
+        code, removed = client.call("DELETE", f"/api/dirs/{enc_empty}")
+        check("DELETE 删除空目录", code == 200 and removed
+              and removed.get("deleted") is True, f"-> {code} {removed}")
+        code, _ = client.call("DELETE", f"/api/dirs/{enc_empty}")
+        check("删除已不存在的目录返回 404", code == 404, f"-> {code}")
+        code, _ = client.call("DELETE", f"/api/dirs/{enc_dir}")
+        check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
+
         from fastapi import HTTPException
         import main as app_module
 
