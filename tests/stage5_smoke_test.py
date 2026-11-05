@@ -1,4 +1,4 @@
-"""阶段五：右键重命名、目录说明与顶层目录卡片视图的可运行结果验证。
+"""阶段五/六：右键重命名、目录说明与纯卡片导航的可运行结果验证。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/stage5_smoke_test.py
@@ -141,6 +141,9 @@ def main() -> int:
     check("页面包含顶层目录卡片与递归条目模板",
           'class="cards"' in index_html and "<card-item" in index_html
           and 'id="card-item-tpl"' in index_html)
+    check("侧栏树已移除，导航完全由卡片承担",
+          "tree-node" not in index_html and "sidebar" not in index_html
+          and "TreeNode" not in app_js and "selected-bar" in index_html)
     check("页面包含右键菜单与重命名/说明对话框",
           'class="context-menu"' in index_html and "showRename" in index_html
           and "showDescription" in index_html and "@contextmenu.prevent" in index_html)
@@ -243,7 +246,8 @@ def main() -> int:
             check("无头浏览器返回卡片页面 DOM", len(dom) > 2000 and "<html" in dom.lower(),
                   f"-> {len(dom)} 字符")
             check("顶层目录以卡片形式渲染",
-                  "顶层目录" in dom and 'class="card"' in dom and "card-desc" in dom)
+                  "文档库" in dom and 'class="card"' in dom and "card-desc" in dom)
+            check("卡片页不再包含侧栏树", "tree-row" not in dom and "sidebar" not in dom)
             check("卡片内部内容以流式条目呈现", "card-items" in dom
                   and "class=\"chip dir\"" in dom and "class=\"chip file\"" in dom)
             import re as _re

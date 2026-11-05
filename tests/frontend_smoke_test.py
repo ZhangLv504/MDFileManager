@@ -1,4 +1,4 @@
-"""阶段二/三/四可运行结果验证：静态页面、渲染依赖、公式扩展、目录新建与 API 联动。
+"""前端可运行结果验证：静态页面、渲染依赖、公式扩展、卡片导航与 API 联动。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/frontend_smoke_test.py
@@ -166,8 +166,8 @@ console.log('math-ok');
         check("根路径返回前端页面 index.html",
               code == 200 and "text/html" in content_type and 'id="app"' in index_html,
               f"-> {code} {content_type}")
-        check("页面挂载 Vue 文档树与 v-html 渲染区",
-              "<tree-node" in index_html and 'v-html="renderedHtml"' in index_html)
+        check("页面挂载 Vue 卡片视图与 v-html 渲染区",
+              "<card-item" in index_html and 'v-html="renderedHtml"' in index_html)
         check("页面引用标准解析库、样式表与 KaTeX",
               all(token in index_html for token in (
                   "vendor/marked.min.js", "vendor/purify.min.js",
@@ -177,9 +177,12 @@ console.log('math-ok');
         check("新建对话框区分目录/文档且未选目录时禁用文档",
               "kind-switch" in index_html and 'newKind === \'doc\'' in index_html
               and ':disabled="!selectedDir"' in index_html)
-        check("树组件支持选中目录与独立展开箭头",
-              "select-dir" in index_html and "@click.stop" in index_html
-              and "dir-active" in index_html)
+        check("已移除侧栏树，仅保留卡片导航",
+              "tree-node" not in index_html and "sidebar" not in index_html
+              and 'class="cards"' in index_html and "<card-item" in index_html)
+        check("卡片承担目录选中并支持返回文档库",
+              "selectDir(card.path)" in index_html and "selected-bar" in index_html
+              and "closeDoc" in index_html and "← 目录" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -193,6 +196,9 @@ console.log('math-ok');
         check("交互逻辑接入 KaTeX 公式渲染与深链接",
               "MDFMMath.install" in app_js and "renderInto" in app_js
               and "openFromHash" in app_js)
+        check("交互逻辑不再包含树组件",
+              "TreeNode" not in app_js and "toggleNode" not in app_js
+              and "closeDoc" in app_js)
         check("未选目录只建目录、选中目录可建目录或文档",
               "selectDir" in app_js and "newKind" in app_js and "createEntry" in app_js
               and "'/api/dirs/'" in app_js and "'POST'" in app_js)

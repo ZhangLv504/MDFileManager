@@ -1,10 +1,10 @@
-"""阶段三/四：真实浏览器端到端验证（系统自带无头 Chrome / Edge，不下载浏览器）。
+"""真实浏览器端到端验证（系统自带无头 Chrome / Edge，不下载浏览器）。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/browser_smoke_test.py
 
 脚本临时启动 uvicorn、写入一篇含公式的测试文档，用无头浏览器分别打开
-「文档深链接」与「目录深链接」并 dump 渲染后的 DOM，检查 Vue 挂载、文档树、
+「文档深链接」与「目录深链接」并 dump 渲染后的 DOM，检查 Vue 挂载、卡片导航、
 表格、代码高亮、KaTeX 公式以及目录选中状态，最后清理测试文档与临时目录。
 """
 from __future__ import annotations
@@ -162,9 +162,10 @@ def main() -> int:
 
         doc_url = base_url + "/#/doc/" + urllib.parse.quote(TEST_DOC, safe="")
         dom = dump_dom(browser, profile_dir, doc_url, "文档深链接")
-        check("Vue 完成挂载且后端连通", "后端已连接" in dom and "文档分类" in dom)
-        check("递归文档树渲染出测试文档", "__browser__" in dom and ".md" in dom)
+        check("Vue 完成挂载且后端连通", "后端已连接" in dom and "MDFileManager" in dom)
+        check("顶栏呈现当前文档路径", "__browser__" in dom and ".md" in dom)
         check("URL 深链接自动打开指定文档", TEST_DOC in dom)
+        check("打开文档后提供返回目录入口", "← 目录" in dom)
         check("Markdown 标题与表格正确渲染", "<h1" in dom and "<table" in dom)
         check("代码块语法高亮生效", "hljs" in dom or "language-python" in dom)
         check("KaTeX 行内公式渲染", "katex-html" in dom)
@@ -181,10 +182,11 @@ def main() -> int:
         dir_url = base_url + "/#/dir/" + urllib.parse.quote("Projects", safe="")
         dom_dir = dump_dom(browser, profile_dir, dir_url, "目录深链接")
         check("目录深链接自动选中目录", "已选目录" in dom_dir and "Projects" in dom_dir)
-        check("选中目录在树中高亮", "dir-active" in dom_dir)
-        check("侧栏给出目录选中与右键提示", "右键文档或目录可重命名" in dom_dir)
+        check("选中目录对应卡片高亮", "card-active" in dom_dir)
+        check("页面不再包含侧栏树", "tree-row" not in dom_dir and "sidebar" not in dom_dir)
+        check("页面给出右键与卡片操作提示", "右键目录或文档可重命名" in dom_dir)
         check("顶栏新建按钮可用", ">新建<" in dom_dir)
-        check("未选中文档时展示顶层目录卡片", "顶层目录" in dom_dir and "card-desc" in dom_dir)
+        check("未选中文档时展示目录卡片", "文档库" in dom_dir and "card-desc" in dom_dir)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

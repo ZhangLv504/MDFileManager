@@ -1,4 +1,4 @@
-/* MDFileManager 前端：顶层目录卡片视图 + 侧栏树 + 右键重命名 + 目录说明 + Markdown 渲染。
+/* MDFileManager 前端：纯卡片导航 + 右键重命名 + 目录说明 + Markdown 渲染（含公式）。
  * 纯静态 JS，通过 Fetch 调用后端 JSON API，无任何构建步骤。
  * 渲染链：marked（含公式扩展）→ DOMPurify 净化 → Vue v-html → highlight.js / KaTeX 装饰。 */
 (function () {
@@ -83,31 +83,12 @@
     return payload;
   }
 
-  var TreeNode = {
-    name: 'TreeNode',
-    props: {
-      node: { type: Object, required: true },
-      current: { type: String, default: '' },
-      selectedDir: { type: String, default: '' },
-      expanded: { type: Object, required: true },
-      depth: { type: Number, default: 0 }
-    },
-    emits: ['select', 'select-dir', 'toggle', 'context'],
-    template: '#tree-node-tpl',
-    methods: {
-      onClick: function () {
-        if (this.node.type === 'dir') this.$emit('select-dir', this.node.path);
-        else this.$emit('select', this.node.path);
-      },
-      onContext: function (event) { this.$emit('context', event, this.node); }
-    }
-  };
-
   var CardItem = {
     name: 'CardItem',
     props: {
       node: { type: Object, required: true },
-      expanded: { type: Object, required: true }
+      expanded: { type: Object, required: true },
+      selectedDir: { type: String, default: '' }
     },
     emits: ['select', 'dir', 'context'],
     template: '#card-item-tpl',
@@ -127,7 +108,6 @@
     data: function () {
       return {
         tree: [],
-        expanded: {},
         cardExpanded: {},
         selectedDir: '',
         currentPath: '',
@@ -179,7 +159,7 @@
       },
       newHint: function () {
         if (!this.selectedDir) {
-          return '未选中目录时只能创建顶层目录。点击目录名或卡片内的文件夹可选中它。';
+          return '未选中目录时只能创建顶层目录。点击卡片标题或卡片内文件夹可选中目录。';
         }
         return this.newKind === 'dir'
           ? '将在选中目录下创建子目录，创建后会自动选中新目录。'
@@ -238,18 +218,8 @@
         try {
           var data = await api('GET', '/api/tree');
           this.tree = data.tree || [];
-          var expanded = this.expanded;
-          function expandAll(nodes) {
-            nodes.forEach(function (node) {
-              if (node.type === 'dir') {
-                if (expanded[node.path] === undefined) expanded[node.path] = true;
-                expandAll(node.children || []);
-              }
-            });
-          }
-          expandAll(this.tree);
         } catch (error) {
-          this.notify('目录树加载失败：' + error.message, 'error');
+          this.notify('目录加载失败：' + error.message, 'error');
         }
       },
 
@@ -258,10 +228,7 @@
         if (hash.indexOf('#/dir/') === 0) {
           var dir;
           try { dir = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
-          if (dir) {
-            this.selectedDir = dir;
-            this.expanded[dir] = true;
-          }
+          if (dir) this.selectedDir = dir;
           return;
         }
         if (hash.indexOf('#/doc/') !== 0) return;
@@ -272,7 +239,6 @@
 
       selectDir: function (path) {
         this.selectedDir = this.selectedDir === path ? '' : path;
-        if (this.selectedDir) this.expanded[path] = true;
         setHash('dir', this.selectedDir);
       },
 
@@ -284,8 +250,17 @@
       onCardDir: function (node) {
         this.cardExpanded[node.path] = !this.cardExpanded[node.path];
         this.selectedDir = node.path;
-        this.expanded[node.path] = true;
         setHash('dir', node.path);
+      },
+
+      closeDoc: function () {
+        if (!this.confirmDiscard()) return;
+        this.currentPath = '';
+        this.content = '';
+        this.original = '';
+        this.editing = false;
+        if (this.selectedDir) setHash('dir', this.selectedDir);
+        else setHash('doc', '');
       },
 
       openContextMenu: function (event, node) {
@@ -402,7 +377,6 @@
         }
       },
 
-      toggleNode: function (path) { this.expanded[path] = !this.expanded[path]; },
       toggleEdit: function () { if (this.currentPath) this.editing = !this.editing; },
 
       saveDoc: async function () {
@@ -468,7 +442,6 @@
             var dirResult = await api('POST', '/api/dirs/' + encodePath(dirPath));
             this.showNew = false;
             this.selectedDir = dirResult.path;
-            this.expanded[dirResult.path] = true;
             setHash('dir', dirResult.path);
             await this.refreshTree();
             this.notify(dirResult.created ? '目录已创建并选中' : '目录已存在，已选中', 'success');
@@ -498,7 +471,6 @@
     }
   });
 
-  app.component('tree-node', TreeNode);
   app.component('card-item', CardItem);
   app.mount('#app');
 })();

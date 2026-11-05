@@ -61,46 +61,7 @@ body {
 .btn.danger { color: var(--danger); }
 .btn kbd { font-size: 10px; font-family: inherit; opacity: .65; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
 
-.workspace { flex: 1; min-height: 0; display: flex; }
-.sidebar {
-  width: 276px; flex: none; display: flex; flex-direction: column;
-  background: var(--surface); border-right: 1px solid var(--line);
-}
-.side-head {
-  height: 42px; flex: none; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px; font-size: 13px; font-weight: 500; border-bottom: 1px solid var(--line);
-}
-.side-head .count { font-size: 12px; font-weight: 400; color: var(--muted); }
-.selected-dir {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; background: var(--accent-soft);
-  border-bottom: 1px solid #c7ddf2; font-size: 12px;
-}
-.selected-dir .sel-label { color: var(--accent); white-space: nowrap; }
-.selected-dir strong { flex: 1; min-width: 0; color: var(--accent); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.selected-dir button {
-  width: 20px; height: 20px; flex: none; border: 0; border-radius: 5px;
-  background: transparent; color: var(--accent); font-size: 15px; line-height: 1; cursor: pointer;
-}
-.selected-dir button:hover { background: #cfe3f6; }
-.tree { flex: 1; overflow: auto; padding: 8px 0; }
-.tree-row {
-  display: flex; align-items: center; gap: 6px; height: 30px; padding-right: 12px;
-  cursor: pointer; font-size: 13px; white-space: nowrap;
-}
-.tree-row:hover { background: #f2f5f8; }
-.tree-row.active { background: var(--accent-soft); color: var(--accent); }
-.tree-row.dir-active { background: #fdf5e6; color: #854f0b; box-shadow: inset 3px 0 0 #ba7517; }
-.tree-row.dir .name { font-weight: 500; }
-.tree-row .twisty { width: 12px; color: var(--muted); font-size: 11px; cursor: pointer; }
-.tree-row .twisty:hover { color: var(--accent); }
-.tree-row .bullet { width: 12px; text-align: center; color: #9aa2ac; }
-.tree-row .name { overflow: hidden; text-overflow: ellipsis; }
-.tree-row .size { margin-left: auto; font-size: 11px; color: var(--muted); }
-.tree-empty { padding: 24px 16px; color: var(--muted); font-size: 13px; line-height: 1.6; }
-.side-foot { flex: none; padding: 12px 16px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); line-height: 1.7; }
-
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--bg); }
+.main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; background: var(--bg); }
 .notice {
   position: absolute; top: 12px; right: 16px; z-index: 15;
   padding: 9px 14px; border-radius: 8px; font-size: 13px;
@@ -115,15 +76,29 @@ body {
   flex-wrap: wrap; margin-bottom: 16px;
 }
 .cards-head h2 { margin: 0 0 4px; font-size: 16px; font-weight: 500; }
-.cards-head p { margin: 0; font-size: 12px; color: var(--muted); }
+.cards-head p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.cards-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .cards-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.selected-bar {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 320px;
+  padding: 5px 8px 5px 12px; border-radius: 20px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px;
+}
+.selected-bar strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-bar button {
+  width: 18px; height: 18px; flex: none; border: 0; border-radius: 5px;
+  background: transparent; color: var(--accent); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.selected-bar button:hover { background: #cfe3f6; }
+
 .cards { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .card {
   flex: 1 1 340px; min-width: 300px; max-width: 520px;
   padding: 16px; border: 1px solid var(--line); border-radius: 12px;
   background: var(--surface);
 }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.card-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
 .card-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .card-icon { color: var(--accent); font-size: 15px; }
 .card-title h3 { margin: 0; font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -153,6 +128,7 @@ body {
 .chip:hover { border-color: #b9c0c9; background: #f2f5f8; }
 .chip.dir { background: var(--accent-soft); border-color: #c7ddf2; color: var(--accent); font-weight: 500; }
 .chip.file { background: var(--surface); }
+.chip-active { border-color: #ba7517; box-shadow: inset 0 0 0 1px #ba7517; }
 .chip-mark { flex: none; font-size: 11px; opacity: .8; }
 .chip-children {
   flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px;

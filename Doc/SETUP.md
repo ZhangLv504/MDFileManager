@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五卡片与重命名 `stage-5-cards-rename`。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六纯卡片导航 `stage-6-card-only`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -151,7 +151,7 @@ cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
 
 | 文件 | 库 / 版本 | 作用 |
 | --- | --- | --- |
-| `vue.global.prod.js` | Vue **3.5.44** | 视图层框架（含模板编译器的全局构建版）。负责递归文档树、卡片视图、右键菜单、新建/编辑/保存等交互；无需打包工具。 |
+| `vue.global.prod.js` | Vue **3.5.44** | 视图层框架（含模板编译器的全局构建版）。负责卡片视图、递归条目组件、右键菜单、新建/编辑/保存等交互；无需打包工具。 |
 | `marked.min.js` | marked **15.0.12** | 标准 Markdown 解析引擎，把源码转成 HTML，支持 GFM 标题、表格、列表、代码块等。 |
 | `purify.min.js` | DOMPurify **3.4.17** | 净化 marked 输出的 HTML，过滤脚本与危险属性，防止文档内容引发 XSS。 |
 | `highlight.min.js` | highlight.js **11.12.0** | 对 `pre code` 代码块做语法高亮（`hljs.highlightElement`）。 |
@@ -162,7 +162,7 @@ cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
 | `katex/fonts/*.woff2` | KaTeX **0.16.22**，20 个文件 | 数学符号与字形字体，离线渲染公式必需。 |
 | `../math.js`（项目自写，非第三方） | — | 为 marked 注册公式扩展：先把公式换成占位 `span`，等 DOMPurify 净化、Vue 挂载后再由 KaTeX 原地填充，避免 marked 的反斜杠转义破坏公式。 |
 
-引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段五未引入新的第三方库。
+引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四、五、六均未引入新第三方库。
 
 ---
 
@@ -197,8 +197,8 @@ py -3.12 -m venv .venv
 
 | 地址 | 用途 |
 | --- | --- |
-| `http://127.0.0.1:8000/` | 前端页面：顶层目录卡片、文档树、Markdown 渲染、编辑与保存 |
-| `http://127.0.0.1:8000/#/doc/分类%2F文档.md` | 文档深链接，打开即自动选中并渲染指定文档（路径需 URL 编码） |
+| `http://127.0.0.1:8000/` | 前端页面：纯卡片目录导航、Markdown 渲染、编辑与保存 |
+| `http://127.0.0.1:8000/#/doc/分类%2F文档.md` | 文档深链接，打开即自动渲染指定文档（路径需 URL 编码） |
 | `http://127.0.0.1:8000/#/dir/分类%2F子目录` | 目录深链接，打开即选中该目录，便于连续新建 |
 | `http://127.0.0.1:8000/docs` | Swagger UI，可直接测试全部后端接口 |
 | `http://127.0.0.1:8000/api/health` | 健康检查，返回 `data/` 路径与基础分类 |
@@ -214,9 +214,9 @@ py -3.12 -m venv .venv
 
 ```bash
 .venv/Scripts/python.exe tests/smoke_test.py            # 后端文档 + 目录 API：36/36
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与新建逻辑：35/35
-.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与目录选中：19/19
-.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名 / 说明 / 卡片视图：31/31
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与卡片导航：37/37
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与目录选中：21/21
+.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名 / 说明 / 卡片视图：33/33
 ```
 
 四个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别验证文档渲染与卡片视图的真实 DOM，不下载浏览器。
@@ -231,9 +231,9 @@ MDFileManager/
 │   ├── Projects/
 │   │   └── .description.md # 可选的目录说明（隐藏文件，不出现在文档列表）
 │   └── Knowledge/
-├── web/                    # 纯静态前端
-│   ├── index.html          # 卡片视图 + 树 + 对话框 + 两个 x-template 组件
-│   ├── app.js              # 交互逻辑（卡片 / 树 / 右键 / 重命名 / 说明 / 编辑 / 深链接）
+├── web/                    # 纯静态前端（无侧栏树）
+│   ├── index.html          # 卡片视图 + 对话框 + card-item 递归组件模板
+│   ├── app.js              # 交互逻辑（卡片 / 右键 / 重命名 / 说明 / 编辑 / 深链接 / 返回目录）
 │   ├── math.js             # marked 公式扩展 + KaTeX 填充
 │   ├── style.css
 │   └── vendor/             # 已本地化的前端库（含 katex/fonts/*.woff2）
@@ -243,10 +243,11 @@ MDFileManager/
 
 ### 4.5 交互说明与常见情况
 
-- **顶层目录卡片**：未打开文档时，主区域以流式卡片展示 `data/` 下的每个一级目录；卡片含目录名、文档数与「作用描述」，卡片内部条目同样流式排布，**目录在前、文档在后**。卡片内的文件夹仍是普通目录，点击可继续展开下一级。
+- **纯卡片导航**：已移除左侧树，所有目录浏览都在主区域完成。未打开文档时展示一级目录卡片；打开文档后顶栏出现「← 目录」按钮，随时可返回卡片视图。
+- **卡片内容**：卡片显示目录名、文档篇数与作用描述；卡片与内部条目均为 flex 流式布局，**目录在前、文档在后**；卡片内的文件夹仍是普通目录，点击可递归展开下一级。
+- **选中目录**：点击卡片标题可选中该顶层目录（选中卡片与条目会高亮），点击卡片内文件夹也会选中并展开；「已选目录」显示在卡片视图右上角，可点 × 取消。未选中目录时「新建」只能建顶层目录，选中后可建子目录或 `.md` 文档。
 - **目录说明**：点卡片右上「编辑说明」或右键目录选「编辑说明」，内容保存在该目录的 `.description.md`（隐藏文件，不会出现在文档列表，也不入库）。
-- **右键重命名**：在侧栏树、卡片头或卡片条目上右键，选择「重命名」；文档名需 `.md` 结尾（省略自动补全），目录名不能以 `.md` 结尾；同名冲突返回 409，非法名称返回 400。重命名后当前文档、选中目录与深链接会自动同步到新路径。
-- **新建规则**：未选中目录时只能建顶层目录；选中目录后可建子目录或 `.md` 文档。
+- **右键重命名**：在卡片头或卡片内条目上右键选择「重命名」；文档名需 `.md` 结尾（省略自动补全），目录名不能以 `.md` 结尾；同名冲突返回 409，非法名称返回 400。重命名后当前文档、选中目录与深链接会自动同步。
 - **端口被占用**：换端口 `--port 8001`，或简写启动时设置 `MDFM_PORT=8001`。
 - **换机器 / 依赖缺失**：重新执行 `py -3.12 -m venv .venv` 与 `pip install -r requirements.txt`；`.venv/` 被 `.gitignore` 忽略，不随仓库分发。前端库已随仓库提交，无需重新安装。
 - **离线使用**：前端库（含 KaTeX 字体）全部本地化，启动与渲染都无需联网；只有首次安装 Python 依赖时需要网络。
@@ -260,15 +261,17 @@ MDFileManager/
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
 | 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 36/36 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 35/35 |
-| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 19/19 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 37/37 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 21/21 |
 | 阶段四 · 目录管理 | 无新增第三方库 | `POST /api/dirs` + 目录选中 + 分类新建 |
-| 阶段五 · 卡片与重命名 | 无新增第三方库 | 顶层卡片视图 + 右键重命名 + 目录说明；`tests/stage5_smoke_test.py` 31/31 |
+| 阶段五 · 卡片与重命名 | 无新增第三方库 | 顶层卡片视图 + 右键重命名 + 目录说明；`tests/stage5_smoke_test.py` 33/33 |
+| 阶段六 · 纯卡片导航 | 无新增第三方库 | 移除侧栏树，卡片承担全部导航，新增返回目录入口 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
 
 - 公式支持行内 `$...$` 与块级 `$$...$$`；代码块中的 `$` 不解析；KaTeX 以 `throwOnError: false` 渲染，非法公式保留原文不中断页面。
 - 重命名只改名称、不移动位置；目录创建与重命名都做了安全校验，但**不提供目录删除接口**，删除需手动操作文件系统。
+- 界面已无树形侧栏，层级浏览依赖卡片内展开；深链接仍可直达文档或目录。
 - 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时对应脚本会跳过或失败，但其余脚本与项目本身不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。
