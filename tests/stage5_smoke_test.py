@@ -138,24 +138,25 @@ def main() -> int:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     style_css = (WEB_DIR / "style.css").read_text(encoding="utf-8")
 
-    check("页面包含顶层目录卡片与递归条目模板",
-          'class="cards"' in index_html and "<card-item" in index_html
-          and 'id="card-item-tpl"' in index_html)
-    check("侧栏树已移除，导航完全由卡片承担",
-          "tree-node" not in index_html and "sidebar" not in index_html
-          and "TreeNode" not in app_js and "selected-bar" in index_html)
+    check("页面包含卡片入口与目录详情页",
+          'class="cards"' in index_html and "dir-view" in index_html
+          and '@dblclick="openDir(card.path)"' in index_html)
+    check("一级卡片不再平铺子目录与文档",
+          "card-item" not in index_html and "card-items" not in index_html
+          and "tree-node" not in index_html and "sidebar" not in index_html
+          and "TreeNode" not in app_js and "CardItem" not in app_js)
     check("页面包含右键菜单与重命名/说明对话框",
           'class="context-menu"' in index_html and "showRename" in index_html
           and "showDescription" in index_html and "@contextmenu.prevent" in index_html)
     check("交互逻辑调用重命名与说明接口",
           "'/api/rename'" in app_js and "'PATCH'" in app_js
           and "'/api/descriptions/'" in app_js and "openContextMenu" in app_js)
-    check("卡片数据保证目录在前、文档在后",
-          "topCards" in app_js and "sortNodes" in app_js
-          and "a.type === 'dir' ? -1 : 1" in app_js)
-    check("卡片与内部条目为流式布局",
+    check("目录页数据保证文件夹在前、文档在后",
+          "activeDirs" in app_js and "activeFiles" in app_js
+          and "sortNodes" in app_js and "a.type === 'dir' ? -1 : 1" in app_js)
+    check("卡片与目录页条目为流式布局",
           ".cards {" in style_css and "flex-wrap: wrap" in style_css
-          and ".card-items {" in style_css)
+          and ".tiles {" in style_css)
 
     node_path = shutil.which("node")
     if node_path:
@@ -248,19 +249,17 @@ def main() -> int:
             check("顶层目录以卡片形式渲染",
                   "文档库" in dom and 'class="card"' in dom and "card-desc" in dom)
             check("卡片页不再包含侧栏树", "tree-row" not in dom and "sidebar" not in dom)
-            check("卡片内部内容以流式条目呈现", "card-items" in dom
-                  and "class=\"chip dir\"" in dom and "class=\"chip file\"" in dom)
-            import re as _re
-            card_blocks = _re.split(r'<section class="card"', dom)[1:]
-            order_ok = False
-            for block in card_blocks:
-                dir_pos = block.find('class="chip dir"')
-                file_pos = block.find('class="chip file"')
-                if dir_pos >= 0 and file_pos >= 0 and dir_pos < file_pos:
-                    order_ok = True
-                    break
-            check("卡片内目录排在文档之前", order_ok,
-                  f"-> 检查了 {len(card_blocks)} 张卡片")
+            check("卡片只展示概要，不罗列子目录与文档",
+                  "card-items" not in dom and "chip dir" not in dom
+                  and "双击进入目录" in dom)
+            dir_dom = dump_dom(browser, profile_dir, base_url + "/#/dir/Projects")
+            check("目录深链接打开独立目录页",
+                  "dir-view" in dir_dom and "breadcrumb" in dir_dom
+                  and "编辑说明" in dir_dom)
+            check("目录页文件夹在前、文档在后",
+                  dir_dom.find("dir-tile") >= 0
+                  and dir_dom.find("doc-tile") > dir_dom.find("dir-tile"),
+                  f"-> dir={dir_dom.find('dir-tile')} doc={dir_dom.find('doc-tile')}")
             check("卡片提供说明编辑入口", "编辑说明" in dom)
         else:
             print("[SKIP] 未找到 Chrome / Edge，跳过卡片真实渲染检查")

@@ -166,8 +166,9 @@ console.log('math-ok');
         check("根路径返回前端页面 index.html",
               code == 200 and "text/html" in content_type and 'id="app"' in index_html,
               f"-> {code} {content_type}")
-        check("页面挂载 Vue 卡片视图与 v-html 渲染区",
-              "<card-item" in index_html and 'v-html="renderedHtml"' in index_html)
+        check("页面挂载卡片入口与 v-html 渲染区",
+              'class="cards"' in index_html and 'v-html="renderedHtml"' in index_html
+              and '@dblclick="openDir(card.path)"' in index_html)
         check("页面引用标准解析库、样式表与 KaTeX",
               all(token in index_html for token in (
                   "vendor/marked.min.js", "vendor/purify.min.js",
@@ -177,12 +178,13 @@ console.log('math-ok');
         check("新建对话框区分目录/文档且未选目录时禁用文档",
               "kind-switch" in index_html and 'newKind === \'doc\'' in index_html
               and ':disabled="!selectedDir"' in index_html)
-        check("已移除侧栏树，仅保留卡片导航",
-              "tree-node" not in index_html and "sidebar" not in index_html
-              and 'class="cards"' in index_html and "<card-item" in index_html)
-        check("卡片承担目录选中并支持返回文档库",
-              "selectDir(card.path)" in index_html and "selected-bar" in index_html
-              and "closeDoc" in index_html and "← 目录" in index_html)
+        check("一级卡片不再平铺子目录与文档",
+              "card-item" not in index_html and "card-items" not in index_html
+              and "tree-node" not in index_html and "sidebar" not in index_html)
+        check("目录详情页与返回/面包屑齐备",
+              "dir-view" in index_html and "breadcrumb" in index_html
+              and "goBack" in index_html and "← 返回" in index_html
+              and '@dblclick="openDir(item.path)"' in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -196,9 +198,9 @@ console.log('math-ok');
         check("交互逻辑接入 KaTeX 公式渲染与深链接",
               "MDFMMath.install" in app_js and "renderInto" in app_js
               and "openFromHash" in app_js)
-        check("交互逻辑不再包含树组件",
-              "TreeNode" not in app_js and "toggleNode" not in app_js
-              and "closeDoc" in app_js)
+        check("交互逻辑按卡片页/目录页/文档页三级组织",
+              "activeDirPath" in app_js and "openDir" in app_js and "goBack" in app_js
+              and "TreeNode" not in app_js and "CardItem" not in app_js)
         check("未选目录只建目录、选中目录可建目录或文档",
               "selectDir" in app_js and "newKind" in app_js and "createEntry" in app_js
               and "'/api/dirs/'" in app_js and "'POST'" in app_js)

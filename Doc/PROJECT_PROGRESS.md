@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～六均已完成并通过验证；六个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`。
+> 状态：阶段一～七均已完成并通过验证；七个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`。
 
 ## 核心需求与阶段划分
 
@@ -71,8 +71,15 @@
 - `PATCH /api/rename`、`PUT /api/descriptions/{path}`、树节点 `description`；顶层卡片视图、右键菜单、目录说明；新增 `tests/stage5_smoke_test.py` 31/31。
 
 ### 阶段六 · 纯卡片导航（`stage-6-card-only`）
-- 移除侧栏树及全部相关代码/样式；卡片承担选中、展开、右键与说明编辑；新增「← 目录」返回入口。
-- 四套验证全绿：`tests/smoke_test.py` **36/36**、`tests/frontend_smoke_test.py` **37/37**、`tests/browser_smoke_test.py` **21/21**、`tests/stage5_smoke_test.py` **33/33**；后端零改动。
+- 移除侧栏树及全部相关代码/样式；卡片承担选中、展开、右键与说明编辑；新增返回入口。
+- 四套验证 36/36 + 37/37 + 21/21 + 33/33；后端零改动。
+
+### 阶段七 · 目录详情页（`stage-7-dir-page`）
+- 用户要求「双击卡片进入新的页面，而不是子目录或者文件都在卡片上」。
+- 一级卡片只保留名称、文档数、作用描述与「双击进入目录」提示，删除 `CardItem` 递归组件、`card-items` 平铺与 `cardExpanded` 展开状态。
+- 新增目录详情页：面包屑、目录名、可编辑说明、文件夹区与文档区（均 flex 流式、文件夹在前）；双击文件夹进入下一级，单击文档打开；右键重命名覆盖卡片、目录条目与文档条目。
+- 视图状态由 `activeDirPath` / `currentPath` 推导（卡片库 / 目录页 / 文档页），顶栏「← 返回」逐级回退；`#/dir/...` 改为进入目录页并自动选中，文档深链接自动带出父目录便于返回。
+- 四套验证全绿：`tests/smoke_test.py` **36/36**、`tests/frontend_smoke_test.py` **37/37**、`tests/browser_smoke_test.py` **22/22**、`tests/stage5_smoke_test.py` **34/34**；后端零改动。
 
 ### 运行方式
 
@@ -95,6 +102,6 @@ py -3.12 -m venv .venv
 
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
 - 重命名只改名称、不移动位置；**不提供目录删除接口**，删除需手动操作文件系统。
-- 界面已无树形侧栏，层级浏览依靠卡片内展开与深链接；返回卡片视图用顶栏「← 目录」。
+- 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。

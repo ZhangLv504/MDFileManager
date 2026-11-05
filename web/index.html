@@ -20,12 +20,12 @@
       </div>
     </div>
     <div class="current">
-      <span class="label">当前文档</span>
-      <strong>{{ currentPath || '未选择' }}</strong>
+      <span class="label">{{ currentPath ? '当前文档' : (activeDirPath ? '当前目录' : '当前位置') }}</span>
+      <strong>{{ currentPath || activeDirPath || '文档库' }}</strong>
     </div>
     <div class="actions">
       <span class="status" :class="backendOk ? 'ok' : 'bad'">{{ backendOk ? '后端已连接' : '后端未连接' }}</span>
-      <button class="btn" v-if="currentPath" @click="closeDoc">← 目录</button>
+      <button class="btn" v-if="currentPath || activeDirPath" @click="goBack">← 返回</button>
       <button class="btn" @click="refreshTree">刷新</button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
       <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
@@ -37,11 +37,11 @@
   <main class="main">
     <div class="notice" v-if="notice" :class="notice.type">{{ notice.text }}</div>
 
-    <div class="cards-view" v-if="!currentPath">
+    <div class="cards-view" v-if="!currentPath && !activeDirPath">
       <div class="cards-head">
         <div>
           <h2>文档库</h2>
-          <p>卡片展示目录名称、作用说明与其内容；目录在前，文档在后。右键目录或文档可重命名。</p>
+          <p>双击卡片进入目录；单击可选中目录，右键可重命名或编辑说明。</p>
         </div>
         <div class="cards-meta">
           <span class="selected-bar" v-if="selectedDir">
@@ -52,8 +52,9 @@
         </div>
       </div>
       <div class="cards">
-        <section class="card" v-for="card in topCards" :key="card.path" :class="{ 'card-active': selectedDir === card.path }">
-          <header class="card-head" @click="selectDir(card.path)" @contextmenu.prevent="openContextMenu($event, card.node)">
+        <section class="card" v-for="card in topCards" :key="card.path" :class="{ 'card-active': selectedDir === card.path }"
+          @click="selectDir(card.path)" @dblclick="openDir(card.path)" @contextmenu.prevent="openContextMenu($event, card.node)">
+          <header class="card-head">
             <div class="card-title">
               <span class="card-icon">▣</span>
               <h3 :title="card.path">{{ card.name }}</h3>
@@ -62,13 +63,61 @@
             <button type="button" class="card-edit" title="编辑说明" @click.stop="openDescription(card)">编辑说明</button>
           </header>
           <p class="card-desc" :class="{ empty: !card.description }">{{ card.description || '暂无说明，点击「编辑说明」补充这个分类的用途。' }}</p>
-          <div class="card-items">
-            <card-item v-for="item in card.items" :key="item.path" :node="item" :expanded="cardExpanded" :selected-dir="selectedDir" @select="selectDoc" @dir="onCardDir" @context="openContextMenu"></card-item>
-          </div>
-          <div class="card-empty" v-if="!card.items.length">目录为空，选中它后可新建子目录或文档。</div>
+          <div class="card-foot">双击进入目录 →</div>
         </section>
       </div>
-      <div class="cards-tip">点击卡片标题可选中目录；点击文件夹可展开下一级；右键目录或文档可重命名。卡片与内部条目均为流式布局。</div>
+      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。</div>
+    </div>
+
+    <div class="dir-view" v-else-if="!currentPath">
+      <div class="dir-head">
+        <nav class="breadcrumb">
+          <button type="button" @click="goToCards">文档库</button>
+          <template v-for="crumb in breadcrumbs" :key="crumb.path">
+            <span class="crumb-sep">/</span>
+            <button type="button" @click="openDir(crumb.path)">{{ crumb.name }}</button>
+          </template>
+        </nav>
+        <div class="dir-title-row">
+          <h2>{{ activeDirNode ? activeDirNode.name : activeDirPath }}</h2>
+          <button class="btn" @click="openDescription({ path: activeDirPath, description: activeDirNode ? activeDirNode.description : '' })">编辑说明</button>
+        </div>
+        <p class="dir-desc" :class="{ empty: !activeDescription }">{{ activeDescription || '这个目录还没有说明。' }}</p>
+        <div class="dir-meta">
+          <span class="selected-bar" v-if="selectedDir">
+            已选目录 <strong :title="selectedDir">{{ selectedDir }}</strong>
+            <button type="button" title="取消选择" @click="clearSelectedDir">×</button>
+          </span>
+          <span>{{ activeDirs.length }} 个子目录 · {{ activeFiles.length }} 篇文档</span>
+        </div>
+      </div>
+
+      <section class="dir-section" v-if="activeDirs.length">
+        <h3>文件夹</h3>
+        <div class="tiles">
+          <div class="tile dir-tile" v-for="item in activeDirs" :key="item.path" :class="{ 'tile-active': selectedDir === item.path }"
+            @click="selectDir(item.path)" @dblclick="openDir(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
+            <span class="tile-icon">▣</span>
+            <span class="tile-name" :title="item.path">{{ item.name }}</span>
+            <span class="tile-meta">{{ item.total }} 篇</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="dir-section" v-if="activeFiles.length">
+        <h3>文档</h3>
+        <div class="tiles">
+          <div class="tile doc-tile" v-for="item in activeFiles" :key="item.path"
+            @click="selectDoc(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
+            <span class="tile-icon">·</span>
+            <span class="tile-name" :title="item.path">{{ item.name }}</span>
+            <span class="tile-meta">{{ item.size }} B</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="dir-empty" v-if="!activeDirs.length && !activeFiles.length">目录为空，选中它后可新建子目录或文档。</div>
+      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；右键可重命名。</div>
     </div>
 
     <div class="editor-split" v-else-if="editing">
@@ -137,18 +186,6 @@
     </div>
   </div>
 </div>
-
-<script type="text/x-template" id="card-item-tpl">
-  <div class="card-branch">
-    <button type="button" class="chip" :class="[node.type, { 'chip-active': selectedDir === node.path }]" @click="onClick" @contextmenu.prevent.stop="onContext">
-      <span class="chip-mark">{{ node.type === 'dir' ? (expanded[node.path] ? '▾' : '▸') : '·' }}</span>{{ node.name }}
-    </button>
-    <div class="chip-children" v-if="node.type === 'dir' && expanded[node.path]">
-      <card-item v-for="child in sortedChildren" :key="child.path" :node="child" :expanded="expanded" :selected-dir="selectedDir" @select="$emit('select', $event)" @dir="$emit('dir', $event)" @context="(event, target) => $emit('context', event, target)"></card-item>
-      <span class="chip-empty" v-if="!sortedChildren.length">空目录</span>
-    </div>
-  </div>
-</script>
 
 <script src="/vendor/vue.global.prod.js"></script>
 <script src="/vendor/marked.min.js"></script>

@@ -1,4 +1,4 @@
-/* MDFileManager 前端：纯卡片导航 + 右键重命名 + 目录说明 + Markdown 渲染（含公式）。
+/* MDFileManager 前端：卡片入口 → 目录详情页 → 文档页 的三级导航。
  * 纯静态 JS，通过 Fetch 调用后端 JSON API，无任何构建步骤。
  * 渲染链：marked（含公式扩展）→ DOMPurify 净化 → Vue v-html → highlight.js / KaTeX 装饰。 */
 (function () {
@@ -67,6 +67,15 @@
     }, 0);
   }
 
+  function findNodeByPath(nodes, path) {
+    for (var i = 0; i < (nodes || []).length; i += 1) {
+      if (nodes[i].path === path) return nodes[i];
+      var found = findNodeByPath(nodes[i].children, path);
+      if (found) return found;
+    }
+    return null;
+  }
+
   async function api(method, url, body) {
     var options = { method: method, headers: {} };
     if (body !== undefined) {
@@ -83,32 +92,11 @@
     return payload;
   }
 
-  var CardItem = {
-    name: 'CardItem',
-    props: {
-      node: { type: Object, required: true },
-      expanded: { type: Object, required: true },
-      selectedDir: { type: String, default: '' }
-    },
-    emits: ['select', 'dir', 'context'],
-    template: '#card-item-tpl',
-    computed: {
-      sortedChildren: function () { return sortNodes(this.node.children); }
-    },
-    methods: {
-      onClick: function () {
-        if (this.node.type === 'dir') this.$emit('dir', this.node);
-        else this.$emit('select', this.node.path);
-      },
-      onContext: function (event) { this.$emit('context', event, this.node); }
-    }
-  };
-
   var app = Vue.createApp({
     data: function () {
       return {
         tree: [],
-        cardExpanded: {},
+        activeDirPath: '',
         selectedDir: '',
         currentPath: '',
         content: '',
@@ -146,10 +134,39 @@
               path: dir.path,
               description: (dir.description || '').trim(),
               total: countFiles(dir.children),
-              items: sortNodes(dir.children),
               node: dir
             };
           });
+      },
+      activeDirNode: function () {
+        return this.activeDirPath ? findNodeByPath(this.tree, this.activeDirPath) : null;
+      },
+      activeDescription: function () {
+        return this.activeDirNode ? (this.activeDirNode.description || '').trim() : '';
+      },
+      activeChildren: function () {
+        return this.activeDirNode ? sortNodes(this.activeDirNode.children) : [];
+      },
+      activeDirs: function () {
+        return this.activeChildren.filter(function (node) { return node.type === 'dir'; })
+          .map(function (node) {
+            return {
+              name: node.name, path: node.path, type: 'dir',
+              description: node.description || '', total: countFiles(node.children)
+            };
+          });
+      },
+      activeFiles: function () {
+        return this.activeChildren.filter(function (node) { return node.type === 'file'; });
+      },
+      breadcrumbs: function () {
+        if (!this.activeDirPath) return [];
+        var parts = this.activeDirPath.split('/');
+        var acc = [];
+        return parts.map(function (name) {
+          acc.push(name);
+          return { name: name, path: acc.join('/') };
+        });
       },
       newLocation: function () {
         return this.selectedDir ? this.selectedDir + '/' : 'data/（顶层）';
@@ -159,7 +176,7 @@
       },
       newHint: function () {
         if (!this.selectedDir) {
-          return '未选中目录时只能创建顶层目录。点击卡片标题或卡片内文件夹可选中目录。';
+          return '未选中目录时只能创建顶层目录。单击卡片或目录页里的文件夹可选中目录。';
         }
         return this.newKind === 'dir'
           ? '将在选中目录下创建子目录，创建后会自动选中新目录。'
@@ -228,40 +245,63 @@
         if (hash.indexOf('#/dir/') === 0) {
           var dir;
           try { dir = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
-          if (dir) this.selectedDir = dir;
+          if (dir) this.openDir(dir);
           return;
         }
         if (hash.indexOf('#/doc/') !== 0) return;
         var path;
         try { path = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
-        if (path && path !== this.currentPath) this.selectDoc(path);
+        if (!path) return;
+        var index = path.lastIndexOf('/');
+        if (index > 0) this.activeDirPath = path.slice(0, index);
+        if (path !== this.currentPath) this.selectDoc(path);
       },
 
-      selectDir: function (path) {
-        this.selectedDir = this.selectedDir === path ? '' : path;
-        setHash('dir', this.selectedDir);
-      },
-
-      clearSelectedDir: function () {
-        this.selectedDir = '';
-        setHash('dir', '');
-      },
-
-      onCardDir: function (node) {
-        this.cardExpanded[node.path] = !this.cardExpanded[node.path];
-        this.selectedDir = node.path;
-        setHash('dir', node.path);
-      },
-
-      closeDoc: function () {
-        if (!this.confirmDiscard()) return;
+      openDir: function (path) {
+        if (!path || !this.confirmDiscard()) return;
+        this.activeDirPath = path;
+        this.selectedDir = path;
         this.currentPath = '';
         this.content = '';
         this.original = '';
         this.editing = false;
-        if (this.selectedDir) setHash('dir', this.selectedDir);
-        else setHash('doc', '');
+        setHash('dir', path);
       },
+
+      goToCards: function () {
+        if (!this.confirmDiscard()) return;
+        this.activeDirPath = '';
+        this.selectedDir = '';
+        this.currentPath = '';
+        this.content = '';
+        this.original = '';
+        this.editing = false;
+        setHash('dir', '');
+      },
+
+      goBack: function () {
+        if (!this.confirmDiscard()) return;
+        if (this.currentPath) {
+          this.currentPath = '';
+          this.content = '';
+          this.original = '';
+          this.editing = false;
+          if (this.activeDirPath) setHash('dir', this.activeDirPath);
+          else setHash('doc', '');
+          return;
+        }
+        if (this.activeDirPath) {
+          var parts = this.activeDirPath.split('/');
+          if (parts.length > 1) this.openDir(parts.slice(0, -1).join('/'));
+          else this.goToCards();
+        }
+      },
+
+      selectDir: function (path) {
+        this.selectedDir = this.selectedDir === path ? '' : path;
+      },
+
+      clearSelectedDir: function () { this.selectedDir = ''; },
 
       openContextMenu: function (event, node) {
         if (!node || !node.path) return;
@@ -306,15 +346,16 @@
           this.currentPath = newPath + this.currentPath.slice(oldPath.length);
           setHash('doc', this.currentPath);
         }
+        if (this.activeDirPath === oldPath) {
+          this.activeDirPath = newPath;
+          setHash('dir', newPath);
+        } else if (this.activeDirPath.indexOf(prefix) === 0) {
+          this.activeDirPath = newPath + this.activeDirPath.slice(oldPath.length);
+        }
         if (this.selectedDir === oldPath) {
           this.selectedDir = newPath;
-          setHash('dir', newPath);
         } else if (this.selectedDir.indexOf(prefix) === 0) {
           this.selectedDir = newPath + this.selectedDir.slice(oldPath.length);
-          setHash('dir', this.selectedDir);
-        }
-        if (Object.prototype.hasOwnProperty.call(this.cardExpanded, oldPath)) {
-          this.cardExpanded[newPath] = this.cardExpanded[oldPath];
         }
       },
 
@@ -403,7 +444,8 @@
           this.content = '';
           this.original = '';
           this.editing = false;
-          setHash('doc', '');
+          if (this.activeDirPath) setHash('dir', this.activeDirPath);
+          else setHash('doc', '');
           this.notify('文档已删除', 'success');
           await this.refreshTree();
         } catch (error) {
@@ -442,7 +484,6 @@
             var dirResult = await api('POST', '/api/dirs/' + encodePath(dirPath));
             this.showNew = false;
             this.selectedDir = dirResult.path;
-            setHash('dir', dirResult.path);
             await this.refreshTree();
             this.notify(dirResult.created ? '目录已创建并选中' : '目录已存在，已选中', 'success');
           } catch (error) {
@@ -471,6 +512,5 @@
     }
   });
 
-  app.component('card-item', CardItem);
   app.mount('#app');
 })();
