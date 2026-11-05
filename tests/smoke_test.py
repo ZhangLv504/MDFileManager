@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -103,6 +104,10 @@ def main() -> int:
     doc_b = "Knowledge/__smoke__前端/__smoke__渲染说明.md"
     test_dir = "Projects/__smoke__目录A/__smoke__子目录B"
     doc_in_dir = test_dir + "/说明.md"
+    move_src_dir = "Projects/__smoke__可移动目录"
+    move_dst_dir = "Knowledge/__smoke__目标目录"
+    move_doc = move_src_dir + "/待移动.md"
+    recursive_dir = "Knowledge/__smoke__递归删除"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -181,6 +186,95 @@ def main() -> int:
         code, _ = client.call("DELETE", f"/api/dirs/{enc_dir}")
         check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
 
+        # 阶段九：移动（拖拽整理）接口
+        enc_src = urllib.parse.quote(move_src_dir, safe="/")
+        enc_dst = urllib.parse.quote(move_dst_dir, safe="/")
+        code, _ = client.call("POST", f"/api/dirs/{enc_src}")
+        check("准备移动来源目录", code == 200, f"-> {code}")
+        code, _ = client.call("POST", f"/api/dirs/{enc_dst}")
+        check("准备移动目标目录", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/docs/{urllib.parse.quote(move_doc, safe='/')}",
+                              {"content": "# 待移动\n"})
+        check("准备待移动文档", code == 200, f"-> {code}")
+
+        code, moved = client.call("PATCH", "/api/move",
+                                  {"path": move_doc, "target_dir": move_dst_dir})
+        check("PATCH 移动文档到另一目录", code == 200 and moved
+              and moved.get("moved") is True and moved.get("type") == "file"
+              and moved.get("path") == move_dst_dir + "/待移动.md", f"-> {code} {moved}")
+        code, _ = client.call("GET", f"/api/docs/{urllib.parse.quote(move_doc, safe='/')}")
+        check("移动后旧文档路径失效", code == 404, f"-> {code}")
+        code, _ = client.call("GET", f"/api/docs/{urllib.parse.quote(move_dst_dir + '/待移动.md', safe='/')}")
+        check("移动后新文档路径可读", code == 200, f"-> {code}")
+        code, same = client.call("PATCH", "/api/move",
+                                 {"path": move_dst_dir + "/待移动.md", "target_dir": move_dst_dir})
+        check("移动到当前所在目录幂等返回 moved=false", code == 200 and same
+              and same.get("moved") is False, f"-> {code} {same}")
+
+        code, _ = client.call("PUT", f"/api/docs/{urllib.parse.quote(move_doc, safe='/')}",
+                              {"content": "# 同名冲突\n"})
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": move_doc, "target_dir": move_dst_dir})
+        check("目标目录存在同名文档时返回 409", code == 409, f"-> {code}")
+
+        code, moved_dir = client.call("PATCH", "/api/move",
+                                      {"path": move_src_dir, "target_dir": move_dst_dir})
+        moved_src = move_dst_dir + "/__smoke__可移动目录"
+        check("PATCH 移动整个目录（含子项）", code == 200 and moved_dir
+              and moved_dir.get("type") == "dir" and moved_dir.get("path") == moved_src,
+              f"-> {code} {moved_dir}")
+        code, _ = client.call("GET", f"/api/docs/{urllib.parse.quote(moved_src + '/待移动.md', safe='/')}")
+        check("目录移动后其内部文档仍可访问", code == 200, f"-> {code}")
+
+        code, _ = client.call("POST", f"/api/dirs/{urllib.parse.quote(moved_src + '/子级', safe='/')}")
+        check("准备子目录用于循环移动校验", code == 200, f"-> {code}")
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": moved_src, "target_dir": moved_src + "/子级"})
+        check("拒绝把目录移动到自己的子目录", code == 400, f"-> {code}")
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": moved_src, "target_dir": moved_src})
+        check("拒绝把目录移动到自己", code == 400, f"-> {code}")
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": move_dst_dir + "/待移动.md", "target_dir": ""})
+        check("拒绝把文档移动到 data/ 顶层", code == 400, f"-> {code}")
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": move_dst_dir + "/待移动.md", "target_dir": "../escape"})
+        check("移动接口拒绝路径遍历的目标目录", code in (400, 403, 404), f"-> {code}")
+        code, _ = client.call("PATCH", "/api/move",
+                              {"path": "Projects/__smoke__不存在.md", "target_dir": move_dst_dir})
+        check("移动不存在的条目返回 404", code == 404, f"-> {code}")
+        code, tree_moved = client.call("GET", "/api/tree")
+        check("目录树反映移动后的路径", code == 200
+              and find_node(tree_moved.get("tree", []), moved_src) is not None
+              and find_node(tree_moved.get("tree", []), move_src_dir) is None, f"-> {code}")
+
+        # 阶段九：带名称确认的递归删除
+        enc_rec = urllib.parse.quote(recursive_dir, safe="/")
+        code, _ = client.call("POST", f"/api/dirs/{enc_rec}")
+        check("准备递归删除测试目录", code == 200, f"-> {code}")
+        code, _ = client.call("POST", f"/api/dirs/{urllib.parse.quote(recursive_dir + '/子目录', safe='/')}")
+        check("递归删除目录内创建子目录", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/docs/{urllib.parse.quote(recursive_dir + '/子目录/笔记.md', safe='/')}",
+                              {"content": "# 会被一起删除\n"})
+        check("递归删除目录内创建文档", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/descriptions/{enc_rec}", {"content": "待删除说明"})
+        check("递归删除目录写入说明占位文件", code == 200, f"-> {code}")
+        code, _ = client.call("DELETE", f"/api/dirs/{enc_rec}?recursive=true&confirm="
+                              + urllib.parse.quote("错误名称"))
+        check("递归删除缺少正确名称确认时返回 400", code == 400, f"-> {code}")
+        code, removed_all = client.call(
+            "DELETE", f"/api/dirs/{enc_rec}?recursive=true&confirm="
+            + urllib.parse.quote("__smoke__递归删除"))
+        check("递归删除目录及其全部内容", code == 200 and removed_all
+              and removed_all.get("recursive") is True
+              and removed_all.get("removed_docs") == 1
+              and removed_all.get("removed_dirs") >= 2, f"-> {code} {removed_all}")
+        code, tree_final = client.call("GET", "/api/tree")
+        check("递归删除后目录从目录树消失", code == 200
+              and find_node(tree_final.get("tree", []), recursive_dir) is None, f"-> {code}")
+        code, _ = client.call("DELETE", f"/api/dirs/{enc_rec}")
+        check("递归删除后再次删除返回 404", code == 404, f"-> {code}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -238,6 +332,15 @@ def main() -> int:
                     parent = parent.parent
             except OSError:
                 pass
+        for relative in (
+            "Projects/__smoke__目录A",
+            "Knowledge/__smoke__前端",
+            "Knowledge/__smoke__目标目录",
+            "Knowledge/__smoke__递归删除",
+            "Projects/__smoke__可移动目录",
+            "Projects/__smoke__待删目录",
+        ):
+            shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

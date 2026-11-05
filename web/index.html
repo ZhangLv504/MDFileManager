@@ -41,7 +41,7 @@
       <div class="cards-head">
         <div>
           <h2>文档库</h2>
-          <p>双击卡片进入目录；单击可选中目录，右键可重命名或编辑说明。</p>
+          <p>双击卡片进入目录；单击可选中目录，右键可重命名、移动或编辑说明；也可把目录拖到另一张卡片上。</p>
         </div>
         <div class="cards-meta">
           <span class="selected-bar" v-if="selectedDir">
@@ -52,7 +52,12 @@
         </div>
       </div>
       <div class="cards">
-        <section class="card" v-for="card in topCards" :key="card.path" :class="{ 'card-active': selectedDir === card.path }"
+        <section class="card" v-for="card in topCards" :key="card.path"
+          :class="{ 'card-active': selectedDir === card.path, 'drop-target': dropTarget === card.path, 'dragging': draggingPath === card.path }"
+          draggable="true"
+          @dragstart="onDragStart($event, card.node)" @dragend="onDragEnd"
+          @dragover.prevent="onDragOver($event, card.path)" @dragleave="onDragLeave(card.path)"
+          @drop.prevent="onDrop($event, card.path)"
           @click="selectDir(card.path)" @dblclick="openDir(card.path)" @contextmenu.prevent="openContextMenu($event, card.node)">
           <header class="card-head">
             <div class="card-title">
@@ -66,16 +71,20 @@
           <div class="card-foot">双击进入目录 →</div>
         </section>
       </div>
-      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。</div>
+      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里。</div>
     </div>
 
     <div class="dir-view" v-else-if="!currentPath">
       <div class="dir-head">
         <nav class="breadcrumb">
-          <button type="button" @click="goToCards">文档库</button>
+          <button type="button" :class="{ 'drop-target': dropTarget === '' }"
+            @dragover.prevent="onDragOver($event, '')" @dragleave="onDragLeave('')"
+            @drop.prevent="onDrop($event, '')" @click="goToCards">文档库</button>
           <template v-for="crumb in breadcrumbs" :key="crumb.path">
             <span class="crumb-sep">/</span>
-            <button type="button" @click="openDir(crumb.path)">{{ crumb.name }}</button>
+            <button type="button" :class="{ 'drop-target': dropTarget === crumb.path }"
+              @dragover.prevent="onDragOver($event, crumb.path)" @dragleave="onDragLeave(crumb.path)"
+              @drop.prevent="onDrop($event, crumb.path)" @click="openDir(crumb.path)">{{ crumb.name }}</button>
           </template>
         </nav>
         <div class="dir-title-row">
@@ -91,13 +100,21 @@
             <button type="button" title="取消选择" @click="clearSelectedDir">×</button>
           </span>
           <span>{{ activeDirs.length }} 个子目录 · {{ activeFiles.length }} 篇文档</span>
+          <span class="drop-zone" :class="{ 'drop-target': dropTarget === parentDirPath }"
+            @dragover.prevent="onDragOver($event, parentDirPath)" @dragleave="onDragLeave(parentDirPath)"
+            @drop.prevent="onDrop($event, parentDirPath)">拖到此处 → 移动到上级</span>
         </div>
       </div>
 
       <section class="dir-section" v-if="activeDirs.length">
         <h3>文件夹</h3>
         <div class="tiles">
-          <div class="tile dir-tile" v-for="item in activeDirs" :key="item.path" :class="{ 'tile-active': selectedDir === item.path }"
+          <div class="tile dir-tile" v-for="item in activeDirs" :key="item.path"
+            :class="{ 'tile-active': selectedDir === item.path, 'drop-target': dropTarget === item.path, 'dragging': draggingPath === item.path }"
+            draggable="true"
+            @dragstart="onDragStart($event, item)" @dragend="onDragEnd"
+            @dragover.prevent="onDragOver($event, item.path)" @dragleave="onDragLeave(item.path)"
+            @drop.prevent="onDrop($event, item.path)"
             @click="selectDir(item.path)" @dblclick="openDir(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
             <span class="tile-icon">▣</span>
             <span class="tile-name" :title="item.path">{{ item.name }}</span>
@@ -110,6 +127,8 @@
         <h3>文档</h3>
         <div class="tiles">
           <div class="tile doc-tile" v-for="item in activeFiles" :key="item.path"
+            :class="{ 'dragging': draggingPath === item.path }" draggable="true"
+            @dragstart="onDragStart($event, item)" @dragend="onDragEnd"
             @click="selectDoc(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
             <span class="tile-icon">·</span>
             <span class="tile-name" :title="item.path">{{ item.name }}</span>
@@ -119,7 +138,7 @@
       </section>
 
       <div class="dir-empty" v-if="!activeDirs.length && !activeFiles.length">目录为空，选中它后可新建子目录或文档。</div>
-      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；右键可重命名。</div>
+      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；拖拽条目到文件夹、面包屑或上方区域即可移动；右键可重命名、移动或删除。</div>
     </div>
 
     <div class="editor-split" v-else-if="editing">
@@ -142,13 +161,15 @@
     <div class="ctx-title">{{ contextMenu.node.name }}</div>
     <button type="button" @click="openFromMenu">{{ contextMenu.node.type === 'dir' ? '打开目录' : '打开文档' }}</button>
     <button type="button" @click="startRename">重命名</button>
+    <button type="button" @click="openMoveDialog">移动到…</button>
     <template v-if="contextMenu.node.type === 'dir'">
       <button type="button" @click="startNewInMenu('dir')">在此新建文件夹</button>
       <button type="button" @click="startNewInMenu('doc')">在此新建文档</button>
       <button type="button" @click="startDescriptionFromMenu">编辑说明</button>
     </template>
     <div class="ctx-sep"></div>
-    <button type="button" class="danger" @click="deleteFromMenu">{{ contextMenu.node.type === 'dir' ? '删除目录' : '删除文档' }}</button>
+    <button type="button" class="danger" @click="deleteFromMenu(false)">{{ contextMenu.node.type === 'dir' ? '删除目录' : '删除文档' }}</button>
+    <button type="button" class="danger" v-if="contextMenu.node.type === 'dir'" @click="deleteFromMenu(true)">清空并删除目录…</button>
     <button type="button" @click="closeContextMenu">取消</button>
   </div>
 
@@ -178,6 +199,27 @@
       <div class="dialog-actions">
         <button class="btn" @click="showRename = false">取消</button>
         <button class="btn primary" @click="submitRename">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showMove" @click.self="showMove = false">
+    <div class="dialog">
+      <h3>移动{{ moveSource.type === 'dir' ? '目录' : '文档' }}</h3>
+      <p>待移动：<code>{{ moveSource.path }}</code></p>
+      <p>选择目标目录（自身及其子目录已排除）：</p>
+      <div class="dir-list">
+        <button type="button" v-for="option in moveOptions" :key="option.path"
+          :class="{ active: moveTarget === option.path }" @click="moveTarget = option.path">
+          <span class="dir-list-name">{{ option.name }}</span>
+          <span class="dir-list-path">{{ option.path || 'data/ 顶层' }}</span>
+        </button>
+        <div class="dir-list-empty" v-if="!moveOptions.length">没有可移动到的目标目录。</div>
+      </div>
+      <div class="dialog-hint">目标目录内若存在同名条目会返回冲突提示；移动后深链接与当前视图会自动同步。</div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showMove = false">取消</button>
+        <button class="btn primary" :disabled="!moveOptions.length" @click="submitMove">移动</button>
       </div>
     </div>
   </div>

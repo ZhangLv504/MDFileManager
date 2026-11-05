@@ -191,6 +191,13 @@ console.log('math-ok');
         check("目录页提供新建文件夹与文档快捷入口",
               "createIn(activeDirPath, 'dir')" in index_html
               and "createIn(activeDirPath, 'doc')" in index_html)
+        check("页面提供移动到对话框、拖拽与放置目标",
+              "showMove" in index_html and "dir-list" in index_html
+              and 'draggable="true"' in index_html and "drop-target" in index_html
+              and '@drop.prevent="onDrop' in index_html)
+        check("右键菜单提供移动与递归删除入口",
+              "openMoveDialog" in index_html and "清空并删除目录" in index_html
+              and "deleteFromMenu(true)" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -212,6 +219,12 @@ console.log('math-ok');
               and "'/api/dirs/'" in app_js and "'POST'" in app_js)
         check("交互逻辑调用 Fetch 完成无刷新保存",
               "fetch(" in app_js and "'PUT'" in app_js and "refreshTree()" in app_js)
+        check("交互逻辑调用移动接口并处理递归删除确认",
+              "'/api/move'" in app_js and "moveEntry" in app_js
+              and "recursive=true" in app_js and "confirm=" in app_js)
+        check("拖拽事件链路完整（dragstart / dragover / drop / dragend）",
+              all(token in app_js for token in
+                  ("onDragStart", "onDragOver", "onDrop", "onDragEnd", "draggingPath")))
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
@@ -248,10 +261,34 @@ console.log('math-ok');
         check("预览链路 GET 读回完整 Markdown 源码", code == 200
               and doc and doc.get("content") == content, f"-> {code}")
 
-        code, raw, _ = fetch(base_url, f"/api/docs/{encoded}", "DELETE")
-        check("DELETE 删除文档", code == 200, f"-> {code}")
+        code, raw, _ = fetch(base_url, "/api/move", "PATCH",
+                             {"path": TEST_DOC, "target_dir": TEST_DIR})
+        moved = as_json(raw)
+        moved_path = TEST_DIR + "/__frontend__渲染验证.md"
+        check("前端整理链路 PATCH /api/move 移动文档", code == 200
+              and moved and moved.get("moved") is True
+              and moved.get("path") == moved_path, f"-> {code} {raw[:120]}")
         code, _, _ = fetch(base_url, f"/api/docs/{encoded}")
-        check("删除后 GET 返回 404", code == 404, f"-> {code}")
+        check("移动后旧路径返回 404", code == 404, f"-> {code}")
+        code, raw, _ = fetch(base_url, f"/api/docs/{urllib.parse.quote(moved_path, safe='/')}")
+        check("移动后新路径可读取源码", code == 200
+              and (as_json(raw) or {}).get("content") == content, f"-> {code}")
+
+        nested = TEST_DIR + "/嵌套/深层.md"
+        code, _, _ = fetch(base_url, f"/api/docs/{urllib.parse.quote(nested, safe='/')}",
+                           "PUT", {"content": "# 深层文档\n"})
+        check("递归删除前准备嵌套文档", code == 200, f"-> {code}")
+        rec_url = (f"/api/dirs/{enc_dir}?recursive=true&confirm="
+                   + urllib.parse.quote("__frontend__新目录"))
+        code, raw, _ = fetch(base_url, rec_url, "DELETE")
+        removed = as_json(raw)
+        check("前端整理链路递归删除目录及内容", code == 200
+              and removed and removed.get("recursive") is True
+              and removed.get("removed_docs") >= 1, f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, "/api/tree")
+        check("递归删除后目录树中不再有该目录", code == 200
+              and find_node((as_json(raw) or {}).get("tree", []), TEST_DIR) is None,
+              f"-> {code}")
     finally:
         server.terminate()
         try:
@@ -264,12 +301,7 @@ console.log('math-ok');
                 target.unlink()
         except OSError:
             pass
-        new_dir = BASE_DIR / "data" / TEST_DIR
-        try:
-            if new_dir.is_dir() and not any(new_dir.iterdir()):
-                new_dir.rmdir()
-        except OSError:
-            pass
+        shutil.rmtree(BASE_DIR / "data" / TEST_DIR, ignore_errors=True)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

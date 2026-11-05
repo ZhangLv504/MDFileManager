@@ -32,6 +32,7 @@ MAX_DESCRIPTION_BYTES = 20 * 1024
 DESCRIPTION_CHARS = 500
 DESCRIPTION_FILE = ".description.md"
 MAX_NAME_BYTES = 200
+MAX_RECURSIVE_ITEMS = 2000
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
 _FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"|?*\\]')
@@ -57,7 +58,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.2.0",
+    version="1.3.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -127,6 +128,47 @@ def _parse_dir_path(dir_path: str) -> tuple[Path, str]:
 
 def _parse_entry_path(entry_path: str) -> tuple[Path, str]:
     return _parse_relative_path(entry_path, md_rule="any", min_parts=1, label="条目")
+
+
+def _parse_target_dir(target_dir: str) -> tuple[Path, str]:
+    """目标目录；空串代表 data/ 根，供「移动到顶层」使用。"""
+    if not target_dir or not target_dir.strip():
+        return DATA_ROOT, ""
+    return _parse_dir_path(target_dir.strip())
+
+
+def _assert_plain_path(target: Path) -> None:
+    """路径链上不允许出现符号链接，避免移动/删除越出 data/。"""
+    current = target
+    while current != DATA_ROOT:
+        if current.is_symlink():
+            raise _bad_request("路径中含有符号链接，拒绝操作")
+        parent = current.parent
+        if parent == current:
+            raise _bad_request("路径越出 data/ 根目录")
+        current = parent
+
+
+def _plan_recursive_delete(directory: Path) -> tuple[list[Path], list[Path]]:
+    """先完整扫描再删除：返回 (文件列表, 子目录列表)，遇到符号链接直接拒绝。"""
+    files: list[Path] = []
+    dirs: list[Path] = []
+    for entry in directory.iterdir():
+        if entry.is_symlink():
+            raise _bad_request(f"目录内包含符号链接（{entry.name}），拒绝递归删除")
+        if entry.is_dir():
+            sub_files, sub_dirs = _plan_recursive_delete(entry)
+            files.extend(sub_files)
+            dirs.extend(sub_dirs)
+            dirs.append(entry)
+        else:
+            files.append(entry)
+    if len(files) + len(dirs) > MAX_RECURSIVE_ITEMS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"目录内容超过 {MAX_RECURSIVE_ITEMS} 项，请分批清理后再删除",
+        )
+    return files, dirs
 
 
 def _iso_time(timestamp: float) -> str:
@@ -220,6 +262,11 @@ class RenamePayload(BaseModel):
     new_name: str = Field(..., description="新名称，不含路径分隔符")
 
 
+class MovePayload(BaseModel):
+    path: str = Field(..., description="待移动的文档或目录相对路径")
+    target_dir: str = Field(..., description="目标目录相对路径；空串代表 data/ 顶层")
+
+
 class DescriptionPayload(BaseModel):
     content: str = Field(..., description="目录作用说明文本")
 
@@ -262,11 +309,43 @@ def create_dir(dir_path: str) -> dict[str, Any]:
     return {"path": rel, "created": True}
 
 
-@app.delete("/api/dirs/{dir_path:path}", summary="删除空目录（一并清理隐藏占位文件）")
-def delete_dir(dir_path: str) -> dict[str, Any]:
+@app.delete("/api/dirs/{dir_path:path}", summary="删除目录；recursive=true 时带名称确认递归删除")
+def delete_dir(dir_path: str, recursive: bool = False, confirm: str = "") -> dict[str, Any]:
     target, rel = _parse_dir_path(dir_path)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"目录不存在：{rel}")
+    _assert_plain_path(target)
+
+    if recursive:
+        if confirm.strip() != target.name:
+            raise _bad_request("递归删除需要输入完整的目录名作为二次确认")
+        try:
+            files, dirs = _plan_recursive_delete(target)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"扫描目录失败：{exc}",
+            ) from exc
+        docs = sum(1 for item in files
+                   if item.suffix.lower() == ".md" and not item.name.startswith("."))
+        try:
+            for item in files:
+                item.unlink()
+            for directory in reversed(dirs):
+                directory.rmdir()
+            target.rmdir()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"递归删除失败：{exc}",
+            ) from exc
+        return {
+            "path": rel, "deleted": True, "recursive": True,
+            "removed_docs": docs,
+            "removed_files": len(files),
+            "removed_dirs": len(dirs) + 1,
+        }
+
     try:
         visible = [item for item in target.iterdir() if not item.name.startswith(".")]
     except OSError as exc:
@@ -277,7 +356,7 @@ def delete_dir(dir_path: str) -> dict[str, Any]:
     if visible:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"目录非空，仍有 {len(visible)} 个子项，请先清空其中的文档或子目录",
+            detail=f"目录非空，仍有 {len(visible)} 个子项；可使用「清空并删除目录」，或先清空内容",
         )
     removed: list[str] = []
     for name in (".gitkeep", DESCRIPTION_FILE):
@@ -298,7 +377,7 @@ def delete_dir(dir_path: str) -> dict[str, Any]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除目录失败：{exc}",
         ) from exc
-    return {"path": rel, "deleted": True, "removed_files": removed}
+    return {"path": rel, "deleted": True, "recursive": False, "removed_files": removed}
 
 
 @app.patch("/api/rename", summary="重命名文档或目录（只改名，不移动位置）")
@@ -346,6 +425,61 @@ def rename_entry(payload: RenamePayload) -> dict[str, Any]:
         "path": new_rel,
         "type": "file" if is_file else "dir",
         "renamed": True,
+    }
+
+
+@app.patch("/api/move", summary="移动文档或目录到另一目录（支持拖拽整理）")
+def move_entry(payload: MovePayload) -> dict[str, Any]:
+    source, rel = _parse_entry_path(payload.path)
+    destination, dest_rel = _parse_target_dir(payload.target_dir)
+    if not source.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"条目不存在：{rel}")
+    if source.is_symlink():
+        raise _bad_request("不支持移动符号链接")
+    is_file = source.is_file()
+    if not is_file and not source.is_dir():
+        raise _bad_request("目标既不是文件也不是目录")
+    if is_file and not source.name.lower().endswith(".md"):
+        raise _bad_request("只能移动 .md 文档")
+    _assert_plain_path(source)
+    _assert_plain_path(destination)
+    if not destination.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"目标目录不存在：{dest_rel or 'data/'}",
+        )
+    if is_file and not dest_rel:
+        raise _bad_request("文档必须移动到某个目录中，不能直接放在 data/ 顶层")
+
+    resolved_source = source.resolve()
+    resolved_dest = destination.resolve()
+    if not is_file and (resolved_dest == resolved_source or resolved_source in resolved_dest.parents):
+        raise _bad_request("不能把目录移动到它自己或它的子目录中")
+    if source.parent == destination:
+        return {
+            "old_path": rel, "path": rel,
+            "type": "file" if is_file else "dir", "moved": False,
+        }
+
+    new_target = destination / source.name
+    if new_target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="目标目录中已存在同名文件或目录，请先重命名",
+        )
+    try:
+        source.rename(new_target)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"移动失败：{exc}",
+        ) from exc
+    new_rel = new_target.resolve().relative_to(DATA_ROOT).as_posix()
+    return {
+        "old_path": rel,
+        "path": new_rel,
+        "type": "file" if is_file else "dir",
+        "moved": True,
     }
 
 

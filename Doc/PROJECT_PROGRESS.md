@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～八均已完成并通过验证；八个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`。
+> 状态：阶段一～九均已完成并通过验证；九个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`。
 
 ## 核心需求与阶段划分
 
@@ -44,6 +44,15 @@
   - 删除当前文档或当前所在目录后，自动回退到上级目录/卡片库，并同步选中状态与深链接。
 - **输出**：`main.py` 目录删除接口、前端菜单与快捷入口、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段九：移动 / 拖拽整理与递归删除
+- **目标**：补齐上一阶段留下的两个能力缺口——「移动 / 拖拽整理目录」与「递归删除（带二次确认）」。
+- **机制**：
+  - 后端 `PATCH /api/move`，请求体 `{path, target_dir}`（`target_dir` 为空表示 `data/` 顶层，仅允许目录）；拒绝循环移动、同名冲突 409、文档移到顶层、路径遍历与符号链接；移动到原目录幂等返回 `moved: false`。
+  - 后端 `DELETE /api/dirs/{path}?recursive=true&confirm=目录名`：服务端强制校验目录名作为二次确认；先完整扫描再删除，遇到符号链接直接拒绝，单次上限 2000 项；返回删除的文档数、文件数与目录数。
+  - 前端右键菜单增加「移动到…」（目录列表自动排除自身及子目录）与「清空并删除目录…」（输入目录名二次确认）；卡片、文件夹、文档、面包屑、目录页「移动到上级」区域均支持原生 HTML5 拖放。
+  - 移动 / 删除后自动同步 `currentPath`、`activeDirPath`、`selectedDir` 与地址栏深链接（`syncHash` 统一以当前文档优先）。
+- **输出**：`main.py` 两个新能力、前端拖放与对话框、四套验证脚本扩充。未引入新第三方库。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -77,6 +86,10 @@
 - 后端 `DELETE /api/dirs/{path}`（仅空目录、非空 409、清理隐藏占位文件）；前端右键菜单扩展与目录页快捷新建/删除入口。
 - 四套验证全绿：`tests/smoke_test.py` **40/40**、`tests/frontend_smoke_test.py` **39/39**、`tests/browser_smoke_test.py` **23/23**、`tests/stage5_smoke_test.py` **37/37**。
 
+### 阶段九 · 内容整理（`stage-9-content-organize`）
+- 后端 `PATCH /api/move` 与 `DELETE /api/dirs/{path}?recursive=true&confirm=...`；前端移动到对话框、原生拖放整理、递归删除二次确认与路径自动同步。
+- 四套验证全绿：`tests/smoke_test.py` **65/65**、`tests/frontend_smoke_test.py` **47/47**、`tests/browser_smoke_test.py` **27/27**、`tests/stage5_smoke_test.py` **52/52**。
+
 ### 运行方式
 
 ```bash
@@ -97,7 +110,8 @@ py -3.12 -m venv .venv
 ## 当前能力边界
 
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
-- 重命名只改名称、不移动位置；目录删除**仅限空目录**，非空目录需先清空内容，避免误删文档。
+- 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的递归删除」两种模式。
+- 递归删除不可撤销、无回收站，且不跟随符号链接、单次上限 2000 项；重要数据请先复制 `data/` 备份。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。

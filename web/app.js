@@ -112,6 +112,11 @@
         showRename: false,
         renameName: '',
         renameTarget: { path: '', name: '', type: 'dir' },
+        showMove: false,
+        moveSource: { path: '', name: '', type: 'dir' },
+        moveTarget: '',
+        draggingPath: '',
+        dropTarget: '',
         showDescription: false,
         descriptionText: '',
         descriptionTarget: '',
@@ -167,6 +172,37 @@
           acc.push(name);
           return { name: name, path: acc.join('/') };
         });
+      },
+      parentDirPath: function () {
+        if (!this.activeDirPath) return '';
+        var index = this.activeDirPath.lastIndexOf('/');
+        return index > 0 ? this.activeDirPath.slice(0, index) : '';
+      },
+      allDirs: function () {
+        var result = [];
+        var walk = function (nodes, depth) {
+          sortNodes(nodes).forEach(function (node) {
+            if (node.type !== 'dir') return;
+            result.push({
+              name: new Array(depth + 1).join('　') + node.name,
+              path: node.path,
+              depth: depth
+            });
+            walk(node.children, depth + 1);
+          });
+        };
+        walk(this.tree, 0);
+        return result;
+      },
+      moveOptions: function () {
+        var source = this.moveSource;
+        if (!source.path) return [];
+        var prefix = source.path + '/';
+        var options = this.allDirs.filter(function (item) {
+          return item.path !== source.path && item.path.indexOf(prefix) !== 0;
+        });
+        if (source.type === 'file') return options;
+        return [{ name: '文档库（顶层）', path: '', depth: -1 }].concat(options);
       },
       newLocation: function () {
         return this.selectedDir ? this.selectedDir + '/' : 'data/（顶层）';
@@ -240,6 +276,12 @@
         }
       },
 
+      syncHash: function () {
+        if (this.currentPath) setHash('doc', this.currentPath);
+        else if (this.activeDirPath) setHash('dir', this.activeDirPath);
+        else setHash('dir', '');
+      },
+
       openFromHash: function () {
         var hash = window.location.hash || '';
         if (hash.indexOf('#/dir/') === 0) {
@@ -286,8 +328,7 @@
           this.content = '';
           this.original = '';
           this.editing = false;
-          if (this.activeDirPath) setHash('dir', this.activeDirPath);
-          else setHash('doc', '');
+          this.syncHash();
           return;
         }
         if (this.activeDirPath) {
@@ -307,7 +348,7 @@
         if (!node || !node.path) return;
         this.contextMenu = {
           x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
-          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
+          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
           node: node
         };
       },
@@ -341,27 +382,125 @@
         });
       },
 
-      deleteFromMenu: async function () {
+      openMoveDialog: function () {
+        if (!this.contextMenu) return;
+        var node = this.contextMenu.node;
+        this.moveSource = { path: node.path, name: node.name, type: node.type };
+        var index = node.path.lastIndexOf('/');
+        var parent = index > 0 ? node.path.slice(0, index) : '';
+        this.moveTarget = node.type === 'file' ? parent : '';
+        this.closeContextMenu();
+        var options = this.moveOptions;
+        var target = this.moveTarget;
+        // 默认目标不在候选列表中时，选中第一项。
+        if (!options.some(function (item) { return item.path === target; })) {
+          this.moveTarget = options.length ? options[0].path : '';
+        }
+        this.showMove = true;
+      },
+
+      submitMove: function () {
+        if (!this.moveOptions.length) return;
+        var source = this.moveSource.path;
+        var target = this.moveTarget;
+        this.showMove = false;
+        this.moveEntry(source, target);
+      },
+
+      moveEntry: async function (sourcePath, targetDir) {
+        if (!sourcePath) return;
+        var prefix = sourcePath + '/';
+        if (targetDir === sourcePath || targetDir.indexOf(prefix) === 0) {
+          this.notify('不能把目录移动到它自己或它的子目录中', 'error');
+          return;
+        }
+        if (/\.md$/i.test(sourcePath) && !targetDir) {
+          this.notify('文档必须移动到某个目录中，不能直接放在文档库顶层', 'error');
+          return;
+        }
+        try {
+          var result = await api('PATCH', '/api/move',
+            { path: sourcePath, target_dir: targetDir });
+          if (result.moved) this.rewritePaths(sourcePath, result.path);
+          await this.refreshTree();
+          this.notify(result.moved
+            ? '已移动到 ' + (targetDir || '文档库顶层')
+            : '条目已在该目录中', 'success');
+        } catch (error) {
+          this.notify('移动失败：' + error.message, 'error');
+        }
+      },
+
+      onDragStart: function (event, node) {
+        if (!node || !node.path) return;
+        this.draggingPath = node.path;
+        try {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', node.path);
+        } catch (error) { /* 某些浏览器限制 dataTransfer，使用内存状态兜底 */ }
+      },
+
+      onDragEnd: function () {
+        this.draggingPath = '';
+        this.dropTarget = '';
+      },
+
+      onDragOver: function (event, targetPath) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        this.dropTarget = targetPath;
+      },
+
+      onDragLeave: function (targetPath) {
+        if (this.dropTarget === targetPath) this.dropTarget = '';
+      },
+
+      onDrop: function (event, targetPath) {
+        var source = '';
+        try { source = event.dataTransfer.getData('text/plain') || ''; } catch (error) { /* 忽略 */ }
+        if (!source) source = this.draggingPath;
+        this.draggingPath = '';
+        this.dropTarget = '';
+        if (source) this.moveEntry(source, targetPath);
+      },
+
+      deleteFromMenu: async function (recursive) {
         if (!this.contextMenu) return;
         var node = this.contextMenu.node;
         this.closeContextMenu();
         var label = node.type === 'dir' ? '目录' : '文档';
-        var warning = node.type === 'dir'
-          ? '仅空目录可删除，且会一并清理目录说明。'
-          : '此操作不可撤销。';
-        if (!window.confirm('确定删除' + label + '「' + node.name + '」吗？' + warning)) return;
         var url = node.type === 'dir'
           ? '/api/dirs/' + encodePath(node.path)
           : '/api/docs/' + encodePath(node.path);
+        if (recursive) {
+          var typed = window.prompt(
+            '危险操作：将永久删除目录「' + node.name + '」及其全部子目录与文档。\n请输入目录名以确认：', '');
+          if (typed === null) return;
+          if (typed.trim() !== node.name) {
+            this.notify('名称不匹配，已取消删除', 'error');
+            return;
+          }
+          url += '?recursive=true&confirm=' + encodeURIComponent(node.name);
+        } else {
+          var warning = node.type === 'dir'
+            ? '仅空目录可删除；非空目录请使用右键「清空并删除目录…」。'
+            : '此操作不可撤销。';
+          if (!window.confirm('确定删除' + label + '「' + node.name + '」吗？' + warning)) return;
+        }
         try {
-          await api('DELETE', url);
+          var result = await api('DELETE', url);
           if (node.type === 'file' && this.currentPath === node.path) {
             this.currentPath = '';
             this.content = '';
             this.original = '';
             this.editing = false;
-            if (this.activeDirPath) setHash('dir', this.activeDirPath);
-            else setHash('doc', '');
+          }
+          if (node.type === 'dir' && this.currentPath
+              && (this.currentPath === node.path
+                  || this.currentPath.indexOf(node.path + '/') === 0)) {
+            this.currentPath = '';
+            this.content = '';
+            this.original = '';
+            this.editing = false;
           }
           if (node.type === 'dir' && this.activeDirPath
               && (this.activeDirPath === node.path
@@ -374,8 +513,9 @@
               || this.selectedDir.indexOf(node.path + '/') === 0) {
             this.selectedDir = '';
           }
+          this.syncHash();
           await this.refreshTree();
-          this.notify(label + '已删除', 'success');
+          this.notify(label + (result.recursive ? '及全部内容' : '') + '已删除', 'success');
         } catch (error) {
           this.notify('删除失败：' + error.message, 'error');
         }
@@ -408,14 +548,11 @@
         var prefix = oldPath + '/';
         if (this.currentPath === oldPath) {
           this.currentPath = newPath;
-          setHash('doc', newPath);
         } else if (this.currentPath.indexOf(prefix) === 0) {
           this.currentPath = newPath + this.currentPath.slice(oldPath.length);
-          setHash('doc', this.currentPath);
         }
         if (this.activeDirPath === oldPath) {
           this.activeDirPath = newPath;
-          setHash('dir', newPath);
         } else if (this.activeDirPath.indexOf(prefix) === 0) {
           this.activeDirPath = newPath + this.activeDirPath.slice(oldPath.length);
         }
@@ -424,6 +561,7 @@
         } else if (this.selectedDir.indexOf(prefix) === 0) {
           this.selectedDir = newPath + this.selectedDir.slice(oldPath.length);
         }
+        this.syncHash();
       },
 
       submitRename: async function () {
@@ -511,8 +649,7 @@
           this.content = '';
           this.original = '';
           this.editing = false;
-          if (this.activeDirPath) setHash('dir', this.activeDirPath);
-          else setHash('doc', '');
+          this.syncHash();
           this.notify('文档已删除', 'success');
           await this.refreshTree();
         } catch (error) {

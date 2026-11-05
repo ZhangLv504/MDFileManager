@@ -189,6 +189,15 @@ def main() -> int:
         check("顶栏新建按钮可用", ">新建<" in dom_dir)
         check("目录页以文档分区展示内容", "dir-view" in dom_dir and "doc-tile" in dom_dir)
         check("目录页提供新建快捷按钮", "+ 文件夹" in dom_dir and "+ 文档" in dom_dir)
+        check("目录页条目可拖拽且提供移动到上级的放置区",
+              'draggable="true"' in dom_dir and "移动到上级" in dom_dir)
+        check("目录页提示说明拖拽与右键移动", "拖拽条目到文件夹" in dom_dir
+              and "右键可重命名、移动或删除" in dom_dir)
+
+        dom_cards = dump_dom(browser, profile_dir, base_url + "/", "卡片库")
+        check("卡片库支持拖拽卡片并给出移动提示",
+              'draggable="true"' in dom_cards and "拖拽卡片" in dom_cards
+              and "card-desc" in dom_cards)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

@@ -28,6 +28,8 @@ RENAMED_DIR = "Projects/__stage5__已改名"
 TEST_DOC = TEST_DIR + "/笔记.md"
 RENAMED_DOC = TEST_DIR + "/已改名笔记.md"
 CONFLICT_DOC = RENAMED_DIR + "/冲突.md"
+MOVE_TARGET = "Projects/__stage5__移动目标"
+MOVE_DOC = RENAMED_DIR + "/移动测试.md"
 DESCRIPTION = "阶段五卡片验证说明：用于验证目录作用描述与右键重命名。"
 
 BROWSER_CANDIDATES = (
@@ -157,6 +159,16 @@ def main() -> int:
     check("卡片与目录页条目为流式布局",
           ".cards {" in style_css and "flex-wrap: wrap" in style_css
           and ".tiles {" in style_css)
+    check("页面提供移动到对话框与递归删除菜单",
+          "showMove" in index_html and "dir-list" in index_html
+          and "清空并删除目录" in index_html and 'draggable="true"' in index_html)
+    check("交互逻辑接入移动与拖拽整理",
+          "'/api/move'" in app_js and "moveEntry" in app_js
+          and "recursive=true" in app_js and "onDrop" in app_js
+          and "onDragStart" in app_js)
+    check("样式提供拖拽与放置目标反馈",
+          ".dragging" in style_css and ".drop-target" in style_css
+          and ".dir-list" in style_css and ".drop-zone" in style_css)
 
     node_path = shutil.which("node")
     if node_path:
@@ -250,6 +262,47 @@ def main() -> int:
         code, _ = fetch(base_url, "/api/dirs/" + quote(RENAMED_DIR), "DELETE")
         check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
 
+        # 阶段九：拖拽整理（移动）与递归删除接口
+        code, _ = fetch(base_url, "/api/dirs/" + quote(MOVE_TARGET), "POST")
+        check("准备移动目标目录", code == 200, f"-> {code}")
+        code, _ = fetch(base_url, "/api/docs/" + quote(MOVE_DOC), "PUT", {"content": "# 移动测试\n"})
+        check("准备待移动文档", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/move", "PATCH",
+                          {"path": MOVE_DOC, "target_dir": MOVE_TARGET})
+        moved = as_json(raw)
+        moved_path = MOVE_TARGET + "/移动测试.md"
+        check("移动文档到目标目录", code == 200 and moved
+              and moved.get("moved") is True and moved.get("path") == moved_path,
+              f"-> {code} {raw[:160]}")
+        code, _ = fetch(base_url, "/api/docs/" + quote(MOVE_DOC))
+        check("移动后旧路径失效", code == 404, f"-> {code}")
+        code, _ = fetch(base_url, "/api/docs/" + quote(moved_path))
+        check("移动后新路径可读", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/move", "PATCH",
+                          {"path": moved_path, "target_dir": MOVE_TARGET})
+        check("移动到当前目录幂等返回 moved=false", code == 200
+              and (as_json(raw) or {}).get("moved") is False, f"-> {code} {raw[:120]}")
+        code, _ = fetch(base_url, "/api/move", "PATCH",
+                        {"path": moved_path, "target_dir": "../escape"})
+        check("移动接口拒绝路径遍历目标", code in (400, 403, 404), f"-> {code}")
+        code, _ = fetch(base_url, "/api/docs/" + quote(MOVE_TARGET + "/子级/笔记.md"),
+                        "PUT", {"content": "# 深层\n"})
+        check("递归删除前准备嵌套文档", code == 200, f"-> {code}")
+        rec_url = ("/api/dirs/" + quote(MOVE_TARGET)
+                   + "?recursive=true&confirm=" + urllib.parse.quote("__stage5__移动目标"))
+        code, raw = fetch(base_url, rec_url, "DELETE")
+        removed = as_json(raw)
+        check("带名称确认递归删除目录及其内容", code == 200 and removed
+              and removed.get("recursive") is True
+              and removed.get("removed_docs") >= 1, f"-> {code} {raw[:160]}")
+        code, raw = fetch(base_url, "/api/tree")
+        check("递归删除后目标目录从树中消失", code == 200
+              and find_node((as_json(raw) or {}).get("tree", []), MOVE_TARGET) is None,
+              f"-> {code}")
+        code, _ = fetch(base_url, "/api/dirs/" + quote(MOVE_TARGET)
+                        + "?recursive=true&confirm=" + urllib.parse.quote("错误"), "DELETE")
+        check("递归删除不存在的目录返回 404", code == 404, f"-> {code}")
+
         browser = find_browser()
         if browser:
             print(f"使用浏览器：{browser}")
@@ -270,21 +323,14 @@ def main() -> int:
                   dir_dom.find("dir-tile") >= 0
                   and dir_dom.find("doc-tile") > dir_dom.find("dir-tile"),
                   f"-> dir={dir_dom.find('dir-tile')} doc={dir_dom.find('doc-tile')}")
+            check("目录页真实 DOM 含可拖拽条目与移动放置区",
+                  'draggable="true"' in dir_dom and "移动到上级" in dir_dom)
             check("卡片提供说明编辑入口", "编辑说明" in dom)
         else:
             print("[SKIP] 未找到 Chrome / Edge，跳过卡片真实渲染检查")
     finally:
-        for relative in (RENAMED_DIR, TEST_DIR):
-            directory = BASE_DIR / "data" / relative
-            if not directory.is_dir():
-                continue
-            try:
-                for item in directory.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                directory.rmdir()
-            except OSError:
-                pass
+        for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET, "Projects/__stage5__空目录"):
+            shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         server.terminate()
         try:
             server.wait(timeout=8)
