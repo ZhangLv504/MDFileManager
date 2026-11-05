@@ -1,15 +1,16 @@
-"""阶段三：真实浏览器端到端验证（系统自带无头 Chrome / Edge，不下载浏览器）。
+"""阶段三/四：真实浏览器端到端验证（系统自带无头 Chrome / Edge，不下载浏览器）。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/browser_smoke_test.py
 
-脚本会临时启动 uvicorn、写入一篇含公式的测试文档，用无头浏览器打开深链接并
-dump 渲染后的 DOM，检查 Vue 挂载、文档树、表格、代码高亮与 KaTeX 公式渲染，
-最后删除测试文档与浏览器临时目录。
+脚本临时启动 uvicorn、写入一篇含公式的测试文档，用无头浏览器分别打开
+「文档深链接」与「目录深链接」并 dump 渲染后的 DOM，检查 Vue 挂载、文档树、
+表格、代码高亮、KaTeX 公式以及目录选中状态，最后清理测试文档与临时目录。
 """
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -106,6 +107,34 @@ def find_browser() -> Path | None:
     return None
 
 
+def dump_dom(browser: Path, profile_dir: Path, url: str, label: str) -> str:
+    command = [
+        str(browser),
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-dev-shm-usage",
+        "--hide-scrollbars",
+        "--virtual-time-budget=12000",
+        "--dump-dom",
+        f"--user-data-dir={profile_dir}",
+        url,
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
+        )
+        dom = result.stdout or ""
+    except subprocess.TimeoutExpired:
+        dom = ""
+    check(f"无头浏览器返回{label}的完整 DOM", len(dom) > 2000 and "<html" in dom.lower(),
+          f"-> {len(dom)} 字符")
+    return dom
+
+
 def main() -> int:
     browser = find_browser()
     if browser is None:
@@ -131,33 +160,8 @@ def main() -> int:
         code, _ = fetch(base_url, f"/api/docs/{encoded}", "PUT", {"content": TEST_CONTENT})
         check("写入含公式与代码块的测试文档", code == 200, f"-> {code}")
 
-        url = base_url + "/#/doc/" + urllib.parse.quote(TEST_DOC, safe="")
-        command = [
-            str(browser),
-            "--headless=new",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-dev-shm-usage",
-            "--hide-scrollbars",
-            "--virtual-time-budget=12000",
-            "--dump-dom",
-            f"--user-data-dir={profile_dir}",
-            url,
-        ]
-        try:
-            result = subprocess.run(
-                command, capture_output=True, text=True, timeout=120,
-                encoding="utf-8", errors="replace",
-            )
-            dom = result.stdout or ""
-        except subprocess.TimeoutExpired:
-            dom = ""
-            check("无头浏览器在 120 秒内返回 DOM", False, "浏览器调用超时")
-
-        check("无头浏览器返回完整 DOM", len(dom) > 2000 and "<html" in dom.lower(),
-              f"-> {len(dom)} 字符")
+        doc_url = base_url + "/#/doc/" + urllib.parse.quote(TEST_DOC, safe="")
+        dom = dump_dom(browser, profile_dir, doc_url, "文档深链接")
         check("Vue 完成挂载且后端连通", "后端已连接" in dom and "文档分类" in dom)
         check("递归文档树渲染出测试文档", "__browser__" in dom and ".md" in dom)
         check("URL 深链接自动打开指定文档", TEST_DOC in dom)
@@ -168,12 +172,19 @@ def main() -> int:
         check("所有公式占位符均被替换", "math-placeholder" not in dom)
         check("KaTeX 公式数量精确（行内 1 + 块级 1）", dom.count("katex-html") == 2,
               f"-> {dom.count('katex-html')} 个")
-        import re
         code_blocks = re.findall(r"<pre[^>]*>[\s\S]*?</pre>", dom)
         code_text = "".join(code_blocks)
         check("代码块保留原始 $ 且未被插入公式", bool(code_blocks)
               and "katex" not in code_text and "$" in code_text,
               code_text[:200])
+
+        dir_url = base_url + "/#/dir/" + urllib.parse.quote("Projects", safe="")
+        dom_dir = dump_dom(browser, profile_dir, dir_url, "目录深链接")
+        check("目录深链接自动选中目录", "已选目录" in dom_dir and "Projects" in dom_dir)
+        check("选中目录在树中高亮", "dir-active" in dom_dir)
+        check("侧栏给出目录选中与新建提示", "点击目录名可选中它" in dom_dir)
+        check("顶栏新建按钮可用", ">新建<" in dom_dir)
+        check("未选中文档时展示引导占位", "从左侧选择一篇文档" in dom_dir)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

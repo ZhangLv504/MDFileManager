@@ -1,8 +1,8 @@
-"""阶段一可运行结果验证：自动拉起 uvicorn，端到端验证四个 API 与安全边界。
+"""阶段一/四可运行结果验证：自动拉起 uvicorn，端到端验证文档与目录 API、安全边界。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/smoke_test.py
-退出码 0 表示全部通过；脚本会自动清理自己创建的测试文档。
+退出码 0 表示全部通过；脚本会自动清理自己创建的测试文档与目录。
 """
 from __future__ import annotations
 
@@ -101,6 +101,8 @@ def main() -> int:
 
     doc_a = "Projects/__smoke__中文文档.md"
     doc_b = "Knowledge/__smoke__前端/__smoke__渲染说明.md"
+    test_dir = "Projects/__smoke__目录A/__smoke__子目录B"
+    doc_in_dir = test_dir + "/说明.md"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -147,6 +149,26 @@ def main() -> int:
               and find_node(tree3.get("tree", []), "Knowledge/__smoke__前端") is not None
               and find_node(tree3.get("tree", []), doc_b) is not None, f"-> {code}")
 
+        enc_dir = urllib.parse.quote(test_dir, safe="/")
+        code, made = client.call("POST", f"/api/dirs/{enc_dir}")
+        check("POST 创建多级目录（含父目录）", code == 200
+              and made and made.get("created") is True, f"-> {code} {made}")
+        code, again = client.call("POST", f"/api/dirs/{enc_dir}")
+        check("重复创建同一目录幂等返回 created=false", code == 200
+              and again and again.get("created") is False, f"-> {code} {again}")
+        code, tree4 = client.call("GET", "/api/tree")
+        check("目录树中出现新建的空目录节点", code == 200
+              and find_node(tree4.get("tree", []), test_dir) is not None, f"-> {code}")
+        enc_in_dir = urllib.parse.quote(doc_in_dir, safe="/")
+        code, child = client.call("PUT", f"/api/docs/{enc_in_dir}", {"content": "# 目录内文档\n"})
+        check("在新建目录下创建 .md 文档", code == 200
+              and child and child.get("action") == "created", f"-> {code} {child}")
+        code, _ = client.call("POST", "/api/dirs/Projects/%2e%2e%2fescape_dir")
+        check("目录接口拒绝路径遍历", code in (400, 403, 404), f"-> {code}")
+        check("目录接口未在 data/ 外创建目录", not (BASE_DIR / "escape_dir").exists())
+        code, _ = client.call("POST", "/api/dirs/Projects/__smoke__bad.md")
+        check("目录接口拒绝以 .md 结尾的目录名", code == 400, f"-> {code}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -162,6 +184,16 @@ def main() -> int:
                 rejected = False
             check(f"路径安全拦截：{evil or '(空路径)'}", rejected)
 
+        for evil_dir in ("../escape", "Projects/../../escape", "Projects/__smoke__bad.md"):
+            rejected = False
+            try:
+                app_module._parse_dir_path(evil_dir)
+            except HTTPException as error:
+                rejected = error.status_code == 400
+            except Exception:
+                rejected = False
+            check(f"目录路径安全拦截：{evil_dir}", rejected)
+
         code, _ = client.call("GET", "/api/docs/Projects/%2e%2e%2f%2e%2e%2fsecret.md")
         check("HTTP 层拒绝编码后的路径遍历", code in (400, 403, 404), f"-> {code}")
         code, _ = client.call("PUT", "/api/docs/Projects/%2e%2e%2fescape.md", {"content": "x"})
@@ -175,13 +207,15 @@ def main() -> int:
         check("删除后 GET 返回 404", code == 404, f"-> {code}")
         code, _ = client.call("DELETE", f"/api/docs/{enc_b}")
         check("DELETE 删除多级目录下文档", code == 200, f"-> {code}")
+        code, _ = client.call("DELETE", f"/api/docs/{enc_in_dir}")
+        check("DELETE 删除新建目录下文档", code == 200, f"-> {code}")
     finally:
         server.terminate()
         try:
             server.wait(timeout=8)
         except subprocess.TimeoutExpired:
             server.kill()
-        for relative in (doc_a, doc_b):
+        for relative in (doc_a, doc_b, doc_in_dir):
             target = BASE_DIR / "data" / relative
             try:
                 if target.exists():

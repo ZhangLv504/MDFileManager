@@ -1,8 +1,8 @@
-"""阶段二/三可运行结果验证：静态页面、渲染依赖、公式扩展、API 联动与 Markdown 输出。
+"""阶段二/三/四可运行结果验证：静态页面、渲染依赖、公式扩展、目录新建与 API 联动。
 
 运行（在项目根目录）：
     .venv/Scripts/python.exe tests/frontend_smoke_test.py
-退出码 0 表示全部通过；脚本会自动清理自己创建的测试文档。
+退出码 0 表示全部通过；脚本会自动清理自己创建的测试文档与目录。
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ STATIC_ASSETS = (
     "/vendor/katex/fonts/KaTeX_Main-Regular.woff2",
 )
 TEST_DOC = "Projects/__frontend__渲染验证.md"
+TEST_DIR = "Projects/__frontend__新目录"
 
 PASSED = 0
 TOTAL = 0
@@ -173,6 +174,12 @@ console.log('math-ok');
                   "vendor/highlight.min.js", "github-markdown-light.css",
                   "vendor/katex/katex.min.js", "vendor/katex/katex.min.css", "/math.js",
               )))
+        check("新建对话框区分目录/文档且未选目录时禁用文档",
+              "kind-switch" in index_html and 'newKind === \'doc\'' in index_html
+              and ':disabled="!selectedDir"' in index_html)
+        check("树组件支持选中目录与独立展开箭头",
+              "select-dir" in index_html and "@click.stop" in index_html
+              and "dir-active" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -183,15 +190,32 @@ console.log('math-ok');
         check("交互逻辑使用标准解析库并做 XSS 净化",
               "marked.parse" in app_js and "DOMPurify.sanitize" in app_js
               and "hljs.highlightElement" in app_js)
-        check("交互逻辑接入 KaTeX 公式渲染与文档深链接",
+        check("交互逻辑接入 KaTeX 公式渲染与深链接",
               "MDFMMath.install" in app_js and "renderInto" in app_js
               and "openFromHash" in app_js)
+        check("未选目录只建目录、选中目录可建目录或文档",
+              "selectDir" in app_js and "newKind" in app_js and "createEntry" in app_js
+              and "'/api/dirs/'" in app_js and "'POST'" in app_js)
         check("交互逻辑调用 Fetch 完成无刷新保存",
               "fetch(" in app_js and "'PUT'" in app_js and "refreshTree()" in app_js)
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
               code == 200 and "text/html" in ctype, f"-> {code} {ctype}")
+
+        enc_dir = urllib.parse.quote(TEST_DIR, safe="/")
+        code, raw, _ = fetch(base_url, f"/api/dirs/{enc_dir}", "POST")
+        made = as_json(raw)
+        check("目录创建接口 POST /api/dirs 可用", code == 200
+              and made and made.get("created") is True, f"-> {code} {raw[:120]}")
+        code, raw, _ = fetch(base_url, f"/api/dirs/{enc_dir}", "POST")
+        again = as_json(raw)
+        check("重复创建目录幂等返回 created=false", code == 200
+              and again and again.get("created") is False, f"-> {code} {raw[:120]}")
+        code, raw, _ = fetch(base_url, "/api/tree")
+        check("新建目录出现在目录树中", code == 200
+              and find_node((as_json(raw) or {}).get("tree", []), TEST_DIR) is not None,
+              f"-> {code}")
 
         encoded = urllib.parse.quote(TEST_DOC, safe="/")
         content = "# 渲染验证\n\n| 列A | 列B |\n| --- | --- |\n| 1 | 2 |\n\n```python\nprint('hello')\n```\n"
@@ -224,6 +248,12 @@ console.log('math-ok');
         try:
             if target.exists():
                 target.unlink()
+        except OSError:
+            pass
+        new_dir = BASE_DIR / "data" / TEST_DIR
+        try:
+            if new_dir.is_dir() and not any(new_dir.iterdir()):
+                new_dir.rmdir()
         except OSError:
             pass
         output = server.stdout.read() if server.stdout else ""

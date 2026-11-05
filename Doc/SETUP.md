@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）的文档补充 + 阶段三渲染增强 `stage-3-render-enhancement`。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四目录管理 `stage-4-dir-management`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -193,57 +193,61 @@ py -3.12 -m venv .venv
 
 前台运行时按 `Ctrl+C` 停止。开发期如需热重载：`--reload`（依赖 watchfiles）。
 
-### 4.2 访问地址
+### 4.2 访问地址与接口
 
 | 地址 | 用途 |
 | --- | --- |
 | `http://127.0.0.1:8000/` | 前端页面：文档树、Markdown 渲染、编辑与保存 |
 | `http://127.0.0.1:8000/#/doc/分类%2F文档.md` | 文档深链接，打开即自动选中并渲染指定文档（路径需 URL 编码） |
-| `http://127.0.0.1:8000/docs` | Swagger UI，可直接测试四个后端接口 |
+| `http://127.0.0.1:8000/#/dir/分类%2F子目录` | 目录深链接，打开即选中该目录，便于连续新建 |
+| `http://127.0.0.1:8000/docs` | Swagger UI，可直接测试全部后端接口 |
 | `http://127.0.0.1:8000/api/health` | 健康检查，返回 `data/` 路径与基础分类 |
 | `http://127.0.0.1:8000/api/tree` | `data/` 目录树 JSON |
-| `http://127.0.0.1:8000/api/docs/{分类}/{文件名}.md` | GET 读取 / PUT 保存 / DELETE 删除 |
+| `POST /api/dirs/{目录路径}` | 新建目录（可含多级父目录），已存在时幂等返回 `created: false` |
+| `GET / PUT / DELETE /api/docs/{分类}/{文件名}.md` | 读取 / 保存（覆盖）/ 删除 Markdown 文档 |
 
 前端页面与 API 由**同一个 uvicorn 进程**提供，因此不存在跨域问题；页面里的 `fetch` 全部走相对路径 `/api/...`。
 
 ### 4.3 验证是否正常运行
 
 ```bash
-.venv/Scripts/python.exe tests/smoke_test.py            # 阶段一后端：25/25
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 阶段二/三 HTTP 层：29/29
-.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染：13/13
+.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档 + 目录 API：36/36
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与新建逻辑：35/35
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与目录选中：19/19
 ```
 
-三个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档，**不需要先手动启动服务**。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，验证 Vue 挂载、文档树、表格、代码高亮与 KaTeX 公式的真实渲染结果，不下载浏览器。
+三个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别打开文档深链接与目录深链接，验证 Vue 挂载、文档树、表格、代码高亮、KaTeX 公式与目录选中状态，不下载浏览器。
 
 ### 4.4 关键目录
 
 ```text
 MDFileManager/
-├── main.py                 # FastAPI 应用：四个 API + 静态托管
+├── main.py                 # FastAPI 应用：文档 CRUD + 目录创建 + 静态托管
 ├── requirements.txt        # Python 直接依赖
 ├── data/                   # 用户文档（.md 不入库，仅保留 .gitkeep）
 │   ├── Projects/
 │   └── Knowledge/
 ├── web/                    # 纯静态前端
 │   ├── index.html
-│   ├── app.js              # 交互逻辑（Fetch / 树 / 编辑 / 深链接）
+│   ├── app.js              # 交互逻辑（树 / 目录选中 / 分类新建 / 编辑 / 深链接）
 │   ├── math.js             # marked 公式扩展 + KaTeX 填充
 │   ├── style.css
 │   └── vendor/             # 已本地化的前端库
 │       ├── vue / marked / DOMPurify / highlight.js / github-markdown-css
 │       └── katex/          # katex.min.js、katex.min.css、fonts/*.woff2
 ├── tests/                  # 三个可运行验证脚本
-└── Doc/                    # 需求、协作约定、进度与本指南
+└── Doc/                    # 需求、协作约定、进度、新会话指令与本指南
 ```
 
-### 4.5 常见情况
+### 4.5 新建与常见情况
 
+- **新建目录**：未选中任何目录时点「新建」，只能创建 `data/` 下的顶层目录；点击左侧目录名可选中它（箭头只负责展开/折叠），选中后「新建」可在「目录」与「Markdown 文档」之间切换。
+- **新建文档**：选中目录后选择「Markdown 文档」，输入名称即可，`.md` 后缀会自动补全；同名保存为覆盖更新。未选中目录时该选项禁用。
+- **位置提示**：对话框顶部显示创建位置（`data/（顶层）` 或 `选中目录/`），创建成功后新目录会被自动选中，方便连续建子目录。
 - **端口被占用**：换端口 `--port 8001`，或简写启动时设置 `MDFM_PORT=8001`。
 - **换机器 / 依赖缺失**：重新执行 `py -3.12 -m venv .venv` 与 `pip install -r requirements.txt`；`.venv/` 被 `.gitignore` 忽略，不随仓库分发。前端库已随仓库提交，无需重新安装。
 - **离线使用**：前端库（含 KaTeX 字体）全部本地化，启动与渲染都无需联网；只有首次安装 Python 依赖时需要网络。
-- **新增文档**：页面点「新建」，填 `分类/文件名.md`（如 `Knowledge/前端/渲染说明.md`），父目录会自动创建；同名保存即覆盖更新。
-- **分享文档**：选中文档后地址栏会带上 `#/doc/...`，复制该链接即可让别人直接打开同一篇文档。
+- **分享链接**：选中文档或目录后地址栏会带上 `#/doc/...` 或 `#/dir/...`，复制即可直接打开。
 - **数据备份**：直接复制 `data/` 目录即可，没有数据库。
 
 ---
@@ -252,13 +256,15 @@ MDFileManager/
 
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
-| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI，`tests/smoke_test.py` 25/25 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css（均为本地静态文件） | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 29/29 |
-| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式渲染 + URL 深链接 + 真实浏览器验证 13/13 |
+| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 36/36 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css（均为本地静态文件） | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 35/35 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 19/19 |
+| 阶段四 · 目录管理 | 无新增第三方库（复用 FastAPI / Vue） | `POST /api/dirs` + 目录选中 + 分类新建；阶段四未引入新依赖 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
 
 - 公式支持行内 `$...$` 与块级 `$$...$$`；代码块中的 `$` 不解析；KaTeX 以 `throwOnError: false` 渲染，非法公式保留原文不中断页面。
+- 目录创建只对路径做安全校验，不做递归删除；空目录会正常出现在目录树中，删除目录需手动操作文件系统。
 - 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时该脚本返回失败，但前两个脚本与项目本身不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。

@@ -1,5 +1,5 @@
-/* MDFileManager 前端：文档树 + Markdown 高保真渲染（含数学公式）+ 编辑保存。
- * 纯静态 JS，通过 Fetch 调用阶段一的 JSON API，无任何构建步骤。
+/* MDFileManager 前端：文档树 + 目录选中 + 分类新建 + Markdown 渲染（含公式）+ 编辑保存。
+ * 纯静态 JS，通过 Fetch 调用后端 JSON API，无任何构建步骤。
  * 渲染链：marked（含公式扩展）→ DOMPurify 净化 → Vue v-html → highlight.js / KaTeX 装饰。 */
 (function () {
   'use strict';
@@ -45,12 +45,12 @@
     });
   }
 
-  function encodeDocPath(path) {
+  function encodePath(path) {
     return String(path).split('/').map(encodeURIComponent).join('/');
   }
 
-  function setDocHash(path) {
-    var suffix = path ? '#/doc/' + encodeURIComponent(path) : window.location.pathname;
+  function setHash(prefix, path) {
+    var suffix = path ? '#/' + prefix + '/' + encodeURIComponent(path) : window.location.pathname;
     try { window.history.replaceState(null, '', suffix); } catch (error) { /* 忽略 */ }
   }
 
@@ -75,14 +75,15 @@
     props: {
       node: { type: Object, required: true },
       current: { type: String, default: '' },
+      selectedDir: { type: String, default: '' },
       expanded: { type: Object, required: true },
       depth: { type: Number, default: 0 }
     },
-    emits: ['select', 'toggle'],
+    emits: ['select', 'select-dir', 'toggle'],
     template: '#tree-node-tpl',
     methods: {
       onClick: function () {
-        if (this.node.type === 'dir') this.$emit('toggle', this.node.path);
+        if (this.node.type === 'dir') this.$emit('select-dir', this.node.path);
         else this.$emit('select', this.node.path);
       }
     }
@@ -93,6 +94,7 @@
       return {
         tree: [],
         expanded: {},
+        selectedDir: '',
         currentPath: '',
         content: '',
         original: '',
@@ -101,7 +103,8 @@
         backendOk: false,
         notice: null,
         showNew: false,
-        newPath: 'Projects/新文档.md',
+        newKind: 'dir',
+        newName: '',
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null
@@ -118,6 +121,20 @@
           }, 0);
         }
         return count(this.tree);
+      },
+      newLocation: function () {
+        return this.selectedDir ? this.selectedDir + '/' : 'data/（顶层）';
+      },
+      newPlaceholder: function () {
+        return this.newKind === 'dir' ? '例如 前端笔记' : '例如 渲染说明.md';
+      },
+      newHint: function () {
+        if (!this.selectedDir) {
+          return '未选中目录时只能创建顶层目录。点击左侧目录名可选中它，之后即可创建子目录或 .md 文档。';
+        }
+        return this.newKind === 'dir'
+          ? '将在选中目录下创建子目录，创建后会自动选中新目录。'
+          : '文件名可省略 .md（自动补全）；同名保存为覆盖更新。';
       }
     },
 
@@ -186,10 +203,30 @@
 
       openFromHash: function () {
         var hash = window.location.hash || '';
+        if (hash.indexOf('#/dir/') === 0) {
+          var dir;
+          try { dir = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
+          if (dir) {
+            this.selectedDir = dir;
+            this.expanded[dir] = true;
+          }
+          return;
+        }
         if (hash.indexOf('#/doc/') !== 0) return;
         var path;
         try { path = decodeURIComponent(hash.slice(6)); } catch (error) { return; }
         if (path && path !== this.currentPath) this.selectDoc(path);
+      },
+
+      selectDir: function (path) {
+        this.selectedDir = this.selectedDir === path ? '' : path;
+        if (this.selectedDir) this.expanded[path] = true;
+        setHash('dir', this.selectedDir);
+      },
+
+      clearSelectedDir: function () {
+        this.selectedDir = '';
+        setHash('dir', '');
       },
 
       confirmDiscard: function () {
@@ -201,12 +238,12 @@
         if (path === this.currentPath) return;
         if (!this.confirmDiscard()) return;
         try {
-          var data = await api('GET', '/api/docs/' + encodeDocPath(path));
+          var data = await api('GET', '/api/docs/' + encodePath(path));
           this.currentPath = data.path;
           this.content = data.content;
           this.original = data.content;
           this.editing = false;
-          setDocHash(data.path);
+          setHash('doc', data.path);
         } catch (error) {
           this.notify('读取失败：' + error.message, 'error');
         }
@@ -219,7 +256,7 @@
         if (!this.currentPath || this.saving) return;
         this.saving = true;
         try {
-          var result = await api('PUT', '/api/docs/' + encodeDocPath(this.currentPath), { content: this.content });
+          var result = await api('PUT', '/api/docs/' + encodePath(this.currentPath), { content: this.content });
           this.original = this.content;
           this.notify(result.action === 'created' ? '已创建并保存' : '已覆盖更新并保存', 'success');
           await this.refreshTree();
@@ -234,12 +271,12 @@
         if (!this.currentPath) return;
         if (!window.confirm('确定删除「' + this.currentPath + '」吗？此操作不可撤销。')) return;
         try {
-          await api('DELETE', '/api/docs/' + encodeDocPath(this.currentPath));
+          await api('DELETE', '/api/docs/' + encodePath(this.currentPath));
           this.currentPath = '';
           this.content = '';
           this.original = '';
           this.editing = false;
-          setDocHash('');
+          setHash('doc', '');
           this.notify('文档已删除', 'success');
           await this.refreshTree();
         } catch (error) {
@@ -249,40 +286,63 @@
 
       openNewDialog: function () {
         if (!this.confirmDiscard()) return;
-        this.newPath = 'Projects/新文档.md';
+        this.newKind = this.selectedDir ? 'doc' : 'dir';
+        this.newName = '';
         this.showNew = true;
         var self = this;
         Vue.nextTick(function () {
-          if (self.$refs.newPathInput) {
-            self.$refs.newPathInput.focus();
-            self.$refs.newPathInput.select();
-          }
+          if (self.$refs.newNameInput) self.$refs.newNameInput.focus();
         });
       },
 
-      createDoc: async function () {
-        var path = this.newPath.trim();
-        if (!/\.md$/i.test(path)) {
-          this.notify('文件名必须以 .md 结尾', 'error');
+      createEntry: async function () {
+        var name = this.newName.trim();
+        if (!name) {
+          this.notify('请输入名称', 'error');
           return;
         }
-        if (path.indexOf('..') !== -1 || path.charAt(0) === '/' || path.charAt(0) === '\\') {
-          this.notify('路径不能包含 .. 或以 / 开头', 'error');
+        if (name.indexOf('..') !== -1 || name.indexOf('/') !== -1 || name.indexOf('\\') !== -1
+            || name === '.' || name.charAt(0) === '.') {
+          this.notify('名称不能包含路径分隔符、.. 或以点开头', 'error');
           return;
         }
-        var initial = '# ' + path.split('/').pop().replace(/\.md$/i, '') + '\n\n';
+        var base = this.selectedDir;
+        if (this.newKind === 'doc' && !base) {
+          this.notify('请先选中一个目录再新建文档', 'error');
+          return;
+        }
+
+        if (this.newKind === 'dir') {
+          var dirPath = base ? base + '/' + name : name;
+          try {
+            var dirResult = await api('POST', '/api/dirs/' + encodePath(dirPath));
+            this.showNew = false;
+            this.selectedDir = dirResult.path;
+            this.expanded[dirResult.path] = true;
+            setHash('dir', dirResult.path);
+            await this.refreshTree();
+            this.notify(dirResult.created ? '目录已创建并选中' : '目录已存在，已选中', 'success');
+          } catch (error) {
+            this.notify('创建目录失败：' + error.message, 'error');
+          }
+          return;
+        }
+
+        var fileName = /\.md$/i.test(name) ? name : name + '.md';
+        var docPath = base + '/' + fileName;
+        var initial = '# ' + fileName.replace(/\.md$/i, '') + '\n\n';
         try {
-          var result = await api('PUT', '/api/docs/' + encodeDocPath(path), { content: initial });
+          var docResult = await api('PUT', '/api/docs/' + encodePath(docPath), { content: initial });
           this.showNew = false;
-          this.currentPath = result.path;
+          this.currentPath = docResult.path;
           this.content = initial;
           this.original = initial;
           this.editing = true;
-          setDocHash(result.path);
+          setHash('doc', docResult.path);
           await this.refreshTree();
           this.notify('文档已创建，可直接编辑', 'success');
         } catch (error) {
-          this.notify('创建失败：' + error.message, 'error');
+          this.notify('创建文档失败：' + error.message, 'error');
         }
       }
     }

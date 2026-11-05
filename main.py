@@ -1,4 +1,4 @@
-"""MDFileManager - 阶段一：本地 Markdown 文件的 RESTful API。
+"""MDFileManager - 本地 Markdown 文件与目录的 RESTful API。
 
 所有文档以 UTF-8 明文存放在项目根目录的 data/ 下，同名文件覆盖写入即视为版本更新。
 本模块只提供纯净的 JSON API，不含任何模板渲染或界面代码。
@@ -54,8 +54,8 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.0.0",
-    description="本地 Markdown 文档的文件系统映射接口（阶段一：纯 JSON RESTful API）",
+    version="1.1.0",
+    description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -66,19 +66,21 @@ app.add_middleware(
 )
 
 
-def _parse_doc_path(doc_path: str) -> tuple[Path, str]:
+def _parse_relative_path(
+    raw_path: str, *, require_md: bool, min_parts: int, label: str
+) -> tuple[Path, str]:
     """把 'Projects/子目录/文档.md' 解析为 (绝对路径, 相对 data/ 的 posix 路径)。
 
     任何可能越出 data/ 的路径都在此被拒绝：空段、`.`、`..`、绝对路径、
-    盘符、非法字符、隐藏文件、系统保留名、非 .md 后缀，以及符号链接逃逸。
+    盘符、非法字符、隐藏文件、系统保留名，以及符号链接逃逸。
     """
-    if not doc_path or "\x00" in doc_path:
-        raise _bad_request("文档路径不能为空")
-    if doc_path.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", doc_path):
+    if not raw_path or "\x00" in raw_path:
+        raise _bad_request(f"{label}路径不能为空")
+    if raw_path.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", raw_path):
         raise _bad_request("不接受绝对路径或盘符路径")
 
     parts: list[str] = []
-    for part in doc_path.split("/"):
+    for part in raw_path.split("/"):
         if part in ("", ".", ".."):
             raise _bad_request("路径中包含非法段（空段 / . / ..）")
         if _FORBIDDEN_CHARS.search(part):
@@ -91,10 +93,12 @@ def _parse_doc_path(doc_path: str) -> tuple[Path, str]:
             raise _bad_request("名称属于系统保留字")
         parts.append(part)
 
-    if len(parts) < 2:
+    if len(parts) < min_parts:
         raise _bad_request("路径必须包含分类目录与文件名，例如 Projects/说明.md")
-    if not parts[-1].lower().endswith(".md"):
+    if require_md and not parts[-1].lower().endswith(".md"):
         raise _bad_request("仅支持 .md 文件")
+    if not require_md and parts[-1].lower().endswith(".md"):
+        raise _bad_request("目录名不应以 .md 结尾")
 
     rel = Path(*parts)
     target = (DATA_ROOT / rel).resolve()
@@ -103,6 +107,14 @@ def _parse_doc_path(doc_path: str) -> tuple[Path, str]:
     except ValueError:
         raise _bad_request("路径越出 data/ 根目录")
     return target, rel.as_posix()
+
+
+def _parse_doc_path(doc_path: str) -> tuple[Path, str]:
+    return _parse_relative_path(doc_path, require_md=True, min_parts=2, label="文档")
+
+
+def _parse_dir_path(dir_path: str) -> tuple[Path, str]:
+    return _parse_relative_path(dir_path, require_md=False, min_parts=1, label="目录")
 
 
 def _iso_time(timestamp: float) -> str:
@@ -169,6 +181,26 @@ def get_tree() -> dict[str, Any]:
         "tree": _scan(DATA_ROOT, Path()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post("/api/dirs/{dir_path:path}", summary="新建目录（未选中目录时创建顶层目录，选中后创建子目录）")
+def create_dir(dir_path: str) -> dict[str, Any]:
+    target, rel = _parse_dir_path(dir_path)
+    if target.exists():
+        if not target.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="同名路径已是文件，无法创建目录",
+            )
+        return {"path": rel, "created": False}
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建目录失败：{exc}",
+        ) from exc
+    return {"path": rel, "created": True}
 
 
 @app.get("/api/docs/{doc_path:path}", summary="读取指定 MD 文件的源码")
