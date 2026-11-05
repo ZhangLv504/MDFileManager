@@ -2,3 +2,17 @@ cmake-build-*/
 .idea/
 build/
 logs/
+
+# Python / FastAPI
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# 本地智能体工作区数据，不入库
+.workbuddy/
+
+# data/ 下是用户自己的 Markdown 文档，只保留目录占位文件
+data/**/*.md
