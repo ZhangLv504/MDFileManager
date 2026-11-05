@@ -120,6 +120,10 @@
         showDescription: false,
         descriptionText: '',
         descriptionTarget: '',
+        showTrash: false,
+        trashItems: [],
+        trashCount: 0,
+        trashBusy: false,
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null,
@@ -239,6 +243,7 @@
       window.addEventListener('hashchange', this.hashHandler);
       document.addEventListener('click', this.docClickHandler);
       this.checkHealth();
+      this.refreshTrashCount();
       this.refreshTree().then(function () { self.openFromHash(); });
     },
 
@@ -273,6 +278,75 @@
           this.tree = data.tree || [];
         } catch (error) {
           this.notify('目录加载失败：' + error.message, 'error');
+        }
+      },
+
+      refreshTrashCount: async function () {
+        try {
+          var data = await api('GET', '/api/trash');
+          this.trashCount = data.count || 0;
+        } catch (error) {
+          this.trashCount = 0;
+        }
+      },
+
+      loadTrash: async function () {
+        try {
+          var data = await api('GET', '/api/trash');
+          this.trashItems = data.items || [];
+          this.trashCount = data.count || 0;
+        } catch (error) {
+          this.notify('回收站加载失败：' + error.message, 'error');
+        }
+      },
+
+      openTrash: async function () {
+        this.showTrash = true;
+        await this.loadTrash();
+      },
+
+      restoreTrash: async function (itemId) {
+        if (this.trashBusy) return;
+        this.trashBusy = true;
+        try {
+          var result = await api('POST', '/api/trash/restore', { id: itemId });
+          this.notify('已还原到 ' + result.path, 'success');
+          await this.loadTrash();
+          await this.refreshTree();
+        } catch (error) {
+          this.notify('还原失败：' + error.message, 'error');
+        } finally {
+          this.trashBusy = false;
+        }
+      },
+
+      purgeTrash: async function (itemId) {
+        if (this.trashBusy) return;
+        if (!window.confirm('彻底删除这条回收站记录？此操作不可恢复。')) return;
+        this.trashBusy = true;
+        try {
+          await api('DELETE', '/api/trash/' + encodeURIComponent(itemId));
+          await this.loadTrash();
+          this.notify('已彻底删除', 'success');
+        } catch (error) {
+          this.notify('彻底删除失败：' + error.message, 'error');
+        } finally {
+          this.trashBusy = false;
+        }
+      },
+
+      emptyTrash: async function () {
+        if (this.trashBusy) return;
+        if (!window.confirm('确定清空回收站吗？所有条目将被永久删除，不可恢复。')) return;
+        this.trashBusy = true;
+        try {
+          var result = await api('DELETE', '/api/trash');
+          await this.loadTrash();
+          this.notify('回收站已清空（' + result.purged + ' 项）', 'success');
+        } catch (error) {
+          this.notify('清空回收站失败：' + error.message, 'error');
+        } finally {
+          this.trashBusy = false;
         }
       },
 
@@ -473,7 +547,7 @@
           : '/api/docs/' + encodePath(node.path);
         if (recursive) {
           var typed = window.prompt(
-            '危险操作：将永久删除目录「' + node.name + '」及其全部子目录与文档。\n请输入目录名以确认：', '');
+            '将把目录「' + node.name + '」及其全部子目录与文档移入回收站（可还原）。\n请输入目录名以确认：', '');
           if (typed === null) return;
           if (typed.trim() !== node.name) {
             this.notify('名称不匹配，已取消删除', 'error');
@@ -482,8 +556,8 @@
           url += '?recursive=true&confirm=' + encodeURIComponent(node.name);
         } else {
           var warning = node.type === 'dir'
-            ? '仅空目录可删除；非空目录请使用右键「清空并删除目录…」。'
-            : '此操作不可撤销。';
+            ? '仅空目录可删除；非空目录请使用右键「清空并移入回收站…」。删除后可在顶栏回收站还原。'
+            : '删除后可在顶栏回收站还原。';
           if (!window.confirm('确定删除' + label + '「' + node.name + '」吗？' + warning)) return;
         }
         try {
@@ -515,7 +589,9 @@
           }
           this.syncHash();
           await this.refreshTree();
-          this.notify(label + (result.recursive ? '及全部内容' : '') + '已删除', 'success');
+          await this.refreshTrashCount();
+          this.notify(label + (result.recursive ? '及全部内容' : '')
+            + '已移入回收站，可在顶栏还原（编号 ' + result.trash_id + '）', 'success');
         } catch (error) {
           this.notify('删除失败：' + error.message, 'error');
         }
@@ -642,7 +718,8 @@
 
       deleteDoc: async function () {
         if (!this.currentPath) return;
-        if (!window.confirm('确定删除「' + this.currentPath + '」吗？此操作不可撤销。')) return;
+        if (!window.confirm('确定删除「' + this.currentPath
+            + '」吗？删除后会移入回收站，可在顶栏还原。')) return;
         try {
           await api('DELETE', '/api/docs/' + encodePath(this.currentPath));
           this.currentPath = '';
@@ -650,8 +727,9 @@
           this.original = '';
           this.editing = false;
           this.syncHash();
-          this.notify('文档已删除', 'success');
           await this.refreshTree();
+          await this.refreshTrashCount();
+          this.notify('文档已移入回收站，可在顶栏还原', 'success');
         } catch (error) {
           this.notify('删除失败：' + error.message, 'error');
         }

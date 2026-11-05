@@ -13,9 +13,13 @@
 """
 from __future__ import annotations
 
+import errno
+import json
 import os
 import re
+import shutil
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +30,11 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = (BASE_DIR / "data").resolve()
+# 默认把删除内容放在 data/.trash/（隐藏目录，不会出现在目录树）；
+# 可用 MDFM_TRASH_DIR 覆盖，便于测试隔离或把回收站放到其他磁盘。
+TRASH_ROOT = Path(os.environ.get("MDFM_TRASH_DIR") or str(DATA_ROOT / ".trash")).resolve()
+TRASH_META = "meta.json"
+TRASH_PAYLOAD = "payload"
 DEFAULT_CATEGORIES = ("Projects", "Knowledge")
 MAX_DOC_BYTES = 5 * 1024 * 1024
 MAX_DESCRIPTION_BYTES = 20 * 1024
@@ -33,6 +42,7 @@ DESCRIPTION_CHARS = 500
 DESCRIPTION_FILE = ".description.md"
 MAX_NAME_BYTES = 200
 MAX_RECURSIVE_ITEMS = 2000
+MAX_TRASH_ITEMS = 500
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
 _FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"|?*\\]')
@@ -50,6 +60,7 @@ def _bad_request(detail: str) -> HTTPException:
 def _ensure_data_root() -> None:
     """启动时自动创建数据根目录与基础分类目录。"""
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
     for category in DEFAULT_CATEGORIES:
         (DATA_ROOT / category).mkdir(parents=True, exist_ok=True)
 
@@ -58,7 +69,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.3.0",
+    version="1.4.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -149,15 +160,15 @@ def _assert_plain_path(target: Path) -> None:
         current = parent
 
 
-def _plan_recursive_delete(directory: Path) -> tuple[list[Path], list[Path]]:
-    """先完整扫描再删除：返回 (文件列表, 子目录列表)，遇到符号链接直接拒绝。"""
+def _scan_recursive_items(directory: Path) -> tuple[list[Path], list[Path]]:
+    """删除前完整扫描：返回 (文件列表, 子目录列表)，遇到符号链接直接拒绝。"""
     files: list[Path] = []
     dirs: list[Path] = []
     for entry in directory.iterdir():
         if entry.is_symlink():
-            raise _bad_request(f"目录内包含符号链接（{entry.name}），拒绝递归删除")
+            raise _bad_request(f"目录内包含符号链接（{entry.name}），拒绝删除")
         if entry.is_dir():
-            sub_files, sub_dirs = _plan_recursive_delete(entry)
+            sub_files, sub_dirs = _scan_recursive_items(entry)
             files.extend(sub_files)
             dirs.extend(sub_dirs)
             dirs.append(entry)
@@ -253,6 +264,152 @@ def _atomic_write(target: Path, data: bytes) -> None:
                 pass
 
 
+def _move_path(source: Path, destination: Path) -> None:
+    """移动文件/目录；跨磁盘（EXDEV / WinError 17）时自动退化为复制 + 删除源。
+
+    Windows 上 os.rename 不能跨盘符，POSIX 上跨文件系统同理。回收站可通过
+    MDFM_TRASH_DIR 放到另一块磁盘，因此这一层兜底是必要的。
+    """
+    try:
+        source.rename(destination)
+        return
+    except OSError as exc:
+        cross_device = (
+            getattr(exc, "winerror", None) == 17 or exc.errno == errno.EXDEV
+        )
+        if not cross_device:
+            raise
+    if source.is_dir():
+        shutil.copytree(source, destination)
+        shutil.rmtree(source)
+    else:
+        shutil.copy2(source, destination)
+        source.unlink()
+
+
+def _trash_item_dir(item_id: str) -> Path:
+    """回收站条目 ID 只允许安全字符，且解析后必须仍在 .trash/ 内。"""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", item_id or ""):
+        raise _bad_request("回收站条目 ID 非法")
+    target = (TRASH_ROOT / item_id).resolve()
+    try:
+        target.relative_to(TRASH_ROOT.resolve())
+    except ValueError:
+        raise _bad_request("回收站条目越出 .trash/ 目录")
+    return target
+
+
+def _read_trash_meta(item_dir: Path) -> dict[str, Any]:
+    meta_path = item_dir / TRASH_META
+    if not meta_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="回收站条目元数据缺失"
+        )
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取回收站元数据失败：{exc}",
+        ) from exc
+    if not isinstance(meta, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="回收站元数据格式错误",
+        )
+    return meta
+
+
+def _remove_trash_item(item_dir: Path) -> None:
+    try:
+        shutil.rmtree(item_dir)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"彻底删除回收站条目失败：{exc}",
+        ) from exc
+
+
+def _trash_move(target: Path, rel: str, *, recursive: bool) -> dict[str, Any]:
+    """把条目连同内容整体移入回收站并写入元数据；任何失败都会回滚到原位置。
+
+    回收站布局：.trash/<id>/payload/<原名> 保存原内容，.trash/<id>/meta.json
+    保存原路径、类型、删除时间与统计信息，供列表与还原使用。
+    """
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    existing = sum(1 for item in TRASH_ROOT.iterdir() if item.is_dir())
+    if existing >= MAX_TRASH_ITEMS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"回收站已满（{MAX_TRASH_ITEMS} 项），请先清空回收站",
+        )
+
+    item_id = (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        + "-" + uuid.uuid4().hex[:6]
+    )
+    item_dir = TRASH_ROOT / item_id
+    payload_dir = item_dir / TRASH_PAYLOAD
+    try:
+        payload_dir.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建回收站条目失败：{exc}",
+        ) from exc
+
+    moved = payload_dir / target.name
+    try:
+        _move_path(target, moved)
+    except OSError as exc:
+        shutil.rmtree(item_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"移入回收站失败：{exc}",
+        ) from exc
+
+    is_file = moved.is_file()
+    if is_file:
+        files: list[Path] = [moved]
+        dirs: list[Path] = []
+    else:
+        files = [item for item in moved.rglob("*") if item.is_file()]
+        dirs = [item for item in moved.rglob("*") if item.is_dir()]
+    docs = sum(1 for item in files
+               if item.suffix.lower() == ".md" and not item.name.startswith("."))
+    try:
+        size = sum(item.stat().st_size for item in files)
+    except OSError:
+        size = 0
+
+    meta: dict[str, Any] = {
+        "id": item_id,
+        "name": target.name,
+        "original_path": rel,
+        "type": "file" if is_file else "dir",
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "recursive": recursive,
+        "removed_docs": docs,
+        "removed_files": len(files),
+        "removed_dirs": 0 if is_file else len(dirs) + 1,
+        "size": size,
+    }
+    try:
+        _atomic_write(item_dir / TRASH_META,
+                      json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+    except Exception as exc:
+        try:
+            _move_path(moved, target)
+        except OSError:
+            pass
+        shutil.rmtree(item_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"写入回收站元数据失败：{exc}",
+        ) from exc
+    return {**meta, "trashed": True}
+
+
 class DocPayload(BaseModel):
     content: str = Field(..., description="Markdown 源码，UTF-8 文本")
 
@@ -265,6 +422,10 @@ class RenamePayload(BaseModel):
 class MovePayload(BaseModel):
     path: str = Field(..., description="待移动的文档或目录相对路径")
     target_dir: str = Field(..., description="目标目录相对路径；空串代表 data/ 顶层")
+
+
+class RestorePayload(BaseModel):
+    id: str = Field(..., description="回收站条目 ID")
 
 
 class DescriptionPayload(BaseModel):
@@ -289,6 +450,80 @@ def get_tree() -> dict[str, Any]:
     }
 
 
+@app.get("/api/trash", summary="列出回收站条目（可还原或彻底删除）")
+def list_trash() -> dict[str, Any]:
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    items: list[dict[str, Any]] = []
+    for item_dir in sorted(TRASH_ROOT.iterdir(), key=lambda item: item.name, reverse=True):
+        if not item_dir.is_dir() or item_dir.name.startswith("."):
+            continue
+        meta_path = item_dir / TRASH_META
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(meta, dict):
+            meta.setdefault("id", item_dir.name)
+            items.append(meta)
+    return {"items": items, "count": len(items), "max_items": MAX_TRASH_ITEMS}
+
+
+@app.post("/api/trash/restore", summary="把回收站条目还原到原位置")
+def restore_trash(payload: RestorePayload) -> dict[str, Any]:
+    item_dir = _trash_item_dir(payload.id)
+    if not item_dir.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站条目不存在")
+    meta = _read_trash_meta(item_dir)
+    name = str(meta.get("name") or "")
+    payload_path = item_dir / TRASH_PAYLOAD / name
+    if not name or not payload_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="回收站条目内容缺失"
+        )
+    original = str(meta.get("original_path") or "")
+    if meta.get("type") == "file":
+        target, rel = _parse_doc_path(original)
+    else:
+        target, rel = _parse_dir_path(original)
+    if target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"原位置已存在同名条目：{rel}，请先移开或重命名",
+        )
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _move_path(payload_path, target)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"还原失败：{exc}",
+        ) from exc
+    shutil.rmtree(item_dir, ignore_errors=True)
+    return {"restored": True, "id": payload.id, "path": rel, "type": meta.get("type")}
+
+
+@app.delete("/api/trash", summary="清空回收站（全部彻底删除，不可恢复）")
+def empty_trash() -> dict[str, Any]:
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    removed = 0
+    for item_dir in list(TRASH_ROOT.iterdir()):
+        if item_dir.is_dir() and not item_dir.name.startswith("."):
+            _remove_trash_item(item_dir)
+            removed += 1
+    return {"purged": removed, "count": 0}
+
+
+@app.delete("/api/trash/{item_id}", summary="彻底删除单个回收站条目（不可恢复）")
+def purge_trash_item(item_id: str) -> dict[str, Any]:
+    item_dir = _trash_item_dir(item_id)
+    if not item_dir.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站条目不存在")
+    _remove_trash_item(item_dir)
+    return {"id": item_id, "purged": True}
+
+
 @app.post("/api/dirs/{dir_path:path}", summary="新建目录（未选中目录时创建顶层目录，选中后创建子目录）")
 def create_dir(dir_path: str) -> dict[str, Any]:
     target, rel = _parse_dir_path(dir_path)
@@ -309,7 +544,7 @@ def create_dir(dir_path: str) -> dict[str, Any]:
     return {"path": rel, "created": True}
 
 
-@app.delete("/api/dirs/{dir_path:path}", summary="删除目录；recursive=true 时带名称确认递归删除")
+@app.delete("/api/dirs/{dir_path:path}", summary="删除目录并移入回收站；recursive=true 时需名称确认")
 def delete_dir(dir_path: str, recursive: bool = False, confirm: str = "") -> dict[str, Any]:
     target, rel = _parse_dir_path(dir_path)
     if not target.is_dir():
@@ -320,64 +555,37 @@ def delete_dir(dir_path: str, recursive: bool = False, confirm: str = "") -> dic
         if confirm.strip() != target.name:
             raise _bad_request("递归删除需要输入完整的目录名作为二次确认")
         try:
-            files, dirs = _plan_recursive_delete(target)
+            _scan_recursive_items(target)
         except OSError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"扫描目录失败：{exc}",
             ) from exc
-        docs = sum(1 for item in files
-                   if item.suffix.lower() == ".md" and not item.name.startswith("."))
+    else:
         try:
-            for item in files:
-                item.unlink()
-            for directory in reversed(dirs):
-                directory.rmdir()
-            target.rmdir()
+            visible = [item for item in target.iterdir() if not item.name.startswith(".")]
         except OSError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"递归删除失败：{exc}",
+                detail=f"读取目录失败：{exc}",
             ) from exc
-        return {
-            "path": rel, "deleted": True, "recursive": True,
-            "removed_docs": docs,
-            "removed_files": len(files),
-            "removed_dirs": len(dirs) + 1,
-        }
+        if visible:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"目录非空，仍有 {len(visible)} 个子项；可使用「清空并移入回收站」，或先清空内容",
+            )
 
-    try:
-        visible = [item for item in target.iterdir() if not item.name.startswith(".")]
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"读取目录失败：{exc}",
-        ) from exc
-    if visible:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"目录非空，仍有 {len(visible)} 个子项；可使用「清空并删除目录」，或先清空内容",
-        )
-    removed: list[str] = []
-    for name in (".gitkeep", DESCRIPTION_FILE):
-        hidden = target / name
-        if hidden.is_file():
-            try:
-                hidden.unlink()
-                removed.append(name)
-            except OSError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"清理占位文件失败：{exc}",
-                ) from exc
-    try:
-        target.rmdir()
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"删除目录失败：{exc}",
-        ) from exc
-    return {"path": rel, "deleted": True, "recursive": False, "removed_files": removed}
+    result = _trash_move(target, rel, recursive=recursive)
+    return {
+        "path": rel,
+        "deleted": True,
+        "trashed": True,
+        "trash_id": result["id"],
+        "recursive": recursive,
+        "removed_docs": result["removed_docs"],
+        "removed_files": result["removed_files"],
+        "removed_dirs": result["removed_dirs"],
+    }
 
 
 @app.patch("/api/rename", summary="重命名文档或目录（只改名，不移动位置）")
@@ -468,7 +676,7 @@ def move_entry(payload: MovePayload) -> dict[str, Any]:
             detail="目标目录中已存在同名文件或目录，请先重命名",
         )
     try:
-        source.rename(new_target)
+        _move_path(source, new_target)
     except OSError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -544,19 +752,19 @@ def save_doc(doc_path: str, payload: DocPayload) -> dict[str, Any]:
     }
 
 
-@app.delete("/api/docs/{doc_path:path}", summary="删除指定 MD 文件")
+@app.delete("/api/docs/{doc_path:path}", summary="删除指定 MD 文件并移入回收站")
 def delete_doc(doc_path: str) -> dict[str, Any]:
     target, rel = _parse_doc_path(doc_path)
     if not target.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在：{rel}")
-    try:
-        target.unlink()
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"删除失败：{exc}",
-        ) from exc
-    return {"path": rel, "deleted": True}
+    _assert_plain_path(target)
+    result = _trash_move(target, rel, recursive=False)
+    return {
+        "path": rel,
+        "deleted": True,
+        "trashed": True,
+        "trash_id": result["id"],
+    }
 
 
 # 阶段二：同一进程托管纯静态前端页面。

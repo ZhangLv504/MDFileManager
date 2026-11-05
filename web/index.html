@@ -27,6 +27,7 @@
       <span class="status" :class="backendOk ? 'ok' : 'bad'">{{ backendOk ? '后端已连接' : '后端未连接' }}</span>
       <button class="btn" v-if="currentPath || activeDirPath" @click="goBack">← 返回</button>
       <button class="btn" @click="refreshTree">刷新</button>
+      <button class="btn" @click="openTrash" title="删除的文档与目录会先移入回收站，可还原">回收站<span class="trash-badge" v-if="trashCount">{{ trashCount }}</span></button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
       <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
       <button class="btn primary" :disabled="!currentPath || saving" @click="saveDoc">{{ saving ? '保存中…' : '保存' }}<kbd>Ctrl+S</kbd></button>
@@ -41,7 +42,7 @@
       <div class="cards-head">
         <div>
           <h2>文档库</h2>
-          <p>双击卡片进入目录；单击可选中目录，右键可重命名、移动或编辑说明；也可把目录拖到另一张卡片上。</p>
+          <p>双击卡片进入目录；单击可选中目录，右键可重命名、移动或编辑说明；也可把目录拖到另一张卡片上。删除的内容会先进回收站，可随时还原。</p>
         </div>
         <div class="cards-meta">
           <span class="selected-bar" v-if="selectedDir">
@@ -71,7 +72,7 @@
           <div class="card-foot">双击进入目录 →</div>
         </section>
       </div>
-      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里。</div>
+      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里；删除先入回收站，可在顶栏还原。</div>
     </div>
 
     <div class="dir-view" v-else-if="!currentPath">
@@ -138,7 +139,7 @@
       </section>
 
       <div class="dir-empty" v-if="!activeDirs.length && !activeFiles.length">目录为空，选中它后可新建子目录或文档。</div>
-      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；拖拽条目到文件夹、面包屑或上方区域即可移动；右键可重命名、移动或删除。</div>
+      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；拖拽条目到文件夹、面包屑或上方区域即可移动；右键可重命名、移动或删除（先进回收站，可还原）。</div>
     </div>
 
     <div class="editor-split" v-else-if="editing">
@@ -169,7 +170,7 @@
     </template>
     <div class="ctx-sep"></div>
     <button type="button" class="danger" @click="deleteFromMenu(false)">{{ contextMenu.node.type === 'dir' ? '删除目录' : '删除文档' }}</button>
-    <button type="button" class="danger" v-if="contextMenu.node.type === 'dir'" @click="deleteFromMenu(true)">清空并删除目录…</button>
+    <button type="button" class="danger" v-if="contextMenu.node.type === 'dir'" @click="deleteFromMenu(true)">清空并移入回收站…</button>
     <button type="button" @click="closeContextMenu">取消</button>
   </div>
 
@@ -233,6 +234,31 @@
       <div class="dialog-actions">
         <button class="btn" @click="showDescription = false">取消</button>
         <button class="btn primary" @click="submitDescription">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showTrash" @click.self="showTrash = false">
+    <div class="dialog trash-dialog">
+      <h3>回收站 <span class="trash-count">{{ trashCount }} 项</span></h3>
+      <p>删除的文档与目录先移入回收站，可还原到原位置；「彻底删除」与「清空回收站」不可恢复。</p>
+      <div class="trash-list">
+        <div class="trash-item" v-for="item in trashItems" :key="item.id">
+          <div class="trash-info">
+            <strong>{{ item.name }}</strong>
+            <span class="trash-path" :title="item.original_path">{{ item.original_path }}</span>
+            <small>{{ item.type === 'dir' ? '目录' : '文档' }} · {{ item.deleted_at }} · {{ item.removed_docs }} 篇文档 · {{ item.size }} B</small>
+          </div>
+          <div class="trash-actions">
+            <button type="button" class="btn" @click="restoreTrash(item.id)">还原</button>
+            <button type="button" class="btn danger" @click="purgeTrash(item.id)">彻底删除</button>
+          </div>
+        </div>
+        <div class="trash-empty" v-if="!trashItems.length">回收站是空的。</div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn danger" :disabled="!trashItems.length || trashBusy" @click="emptyTrash">清空回收站</button>
+        <button class="btn" @click="showTrash = false">关闭</button>
       </div>
     </div>
   </div>

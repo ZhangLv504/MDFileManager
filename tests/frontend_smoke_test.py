@@ -18,6 +18,9 @@ import urllib.request
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trash_cleanup import cleanup_test_trash  # noqa: E402
+
 WEB_DIR = BASE_DIR / "web"
 STATIC_ASSETS = (
     "/app.js",
@@ -196,8 +199,12 @@ console.log('math-ok');
               and 'draggable="true"' in index_html and "drop-target" in index_html
               and '@drop.prevent="onDrop' in index_html)
         check("右键菜单提供移动与递归删除入口",
-              "openMoveDialog" in index_html and "清空并删除目录" in index_html
+              "openMoveDialog" in index_html and "清空并移入回收站" in index_html
               and "deleteFromMenu(true)" in index_html)
+        check("页面提供回收站入口与还原/彻底删除面板",
+              ">回收站<" in index_html and "openTrash" in index_html
+              and "showTrash" in index_html and "restoreTrash(item.id)" in index_html
+              and "purgeTrash(item.id)" in index_html and "emptyTrash" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -225,6 +232,12 @@ console.log('math-ok');
         check("拖拽事件链路完整（dragstart / dragover / drop / dragend）",
               all(token in app_js for token in
                   ("onDragStart", "onDragOver", "onDrop", "onDragEnd", "draggingPath")))
+        check("交互逻辑调用回收站列表/还原/清空接口",
+              "'/api/trash'" in app_js and "'/api/trash/restore'" in app_js
+              and "refreshTrashCount" in app_js and "loadTrash" in app_js)
+        style_css = (WEB_DIR / "style.css").read_text(encoding="utf-8")
+        check("样式提供回收站面板与角标", ".trash-dialog" in style_css
+              and ".trash-list" in style_css and ".trash-badge" in style_css)
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
@@ -289,6 +302,39 @@ console.log('math-ok');
         check("递归删除后目录树中不再有该目录", code == 200
               and find_node((as_json(raw) or {}).get("tree", []), TEST_DIR) is None,
               f"-> {code}")
+
+        # 阶段十：回收站列表、还原与彻底删除
+        code, raw, _ = fetch(base_url, "/api/trash")
+        listing = as_json(raw) or {}
+        dir_item = next((item for item in listing.get("items", [])
+                         if item.get("original_path") == TEST_DIR), None)
+        check("回收站列表返回被删除的目录条目", code == 200 and dir_item
+              and dir_item.get("type") == "dir"
+              and dir_item.get("removed_docs") >= 1, f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, "/api/trash/restore", "POST", {"id": dir_item["id"]})
+        restored = as_json(raw)
+        check("回收站还原目录到原位置", code == 200 and restored
+              and restored.get("restored") is True
+              and restored.get("path") == TEST_DIR, f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, "/api/tree")
+        check("还原后目录重新出现在目录树", code == 200
+              and find_node((as_json(raw) or {}).get("tree", []), TEST_DIR) is not None,
+              f"-> {code}")
+        code, raw, _ = fetch(base_url, f"/api/docs/{urllib.parse.quote(nested, safe='/')}")
+        check("还原后目录内嵌套文档仍可读", code == 200, f"-> {code}")
+        code, raw, _ = fetch(base_url, "/api/trash/restore", "POST", {"id": "../evil"})
+        check("还原接口拒绝非法条目 ID", code == 400, f"-> {code}")
+        code, raw, _ = fetch(base_url, rec_url, "DELETE")
+        again = as_json(raw) or {}
+        check("再次递归删除生成新回收站条目", code == 200 and bool(again.get("trash_id")),
+              f"-> {code} {raw[:120]}")
+        code, raw, _ = fetch(base_url, "/api/trash/" + again["trash_id"], "DELETE")
+        check("彻底删除该回收站条目", code == 200
+              and (as_json(raw) or {}).get("purged") is True, f"-> {code} {raw[:120]}")
+        code, raw, _ = fetch(base_url, "/api/trash")
+        check("彻底删除后列表不再含该条目", code == 200
+              and not any(item.get("id") == again["trash_id"]
+                          for item in (as_json(raw) or {}).get("items", [])), f"-> {code}")
     finally:
         server.terminate()
         try:
@@ -302,6 +348,7 @@ console.log('math-ok');
         except OSError:
             pass
         shutil.rmtree(BASE_DIR / "data" / TEST_DIR, ignore_errors=True)
+        cleanup_test_trash(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

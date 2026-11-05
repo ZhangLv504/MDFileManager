@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -19,6 +21,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trash_cleanup import cleanup_test_trash  # noqa: E402
 
 PASSED = 0
 TOTAL = 0
@@ -88,13 +92,25 @@ def find_node(nodes, path: str):
     return None
 
 
+def find_trash_item(items, original_path: str):
+    for item in items:
+        if item.get("original_path") == original_path:
+            return item
+    return None
+
+
 def main() -> int:
     port = free_port()
     client = ApiClient(f"http://127.0.0.1:{port}")
+    # 用独立临时目录做回收站，隔离本脚本的所有删除/清空操作。
+    trash_dir = Path(tempfile.mkdtemp(prefix="mdfm-smoke-trash-"))
+    server_env = dict(os.environ)
+    server_env["MDFM_TRASH_DIR"] = str(trash_dir)
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1",
          "--port", str(port), "--log-level", "warning"],
         cwd=str(BASE_DIR),
+        env=server_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -108,6 +124,9 @@ def main() -> int:
     move_dst_dir = "Knowledge/__smoke__目标目录"
     move_doc = move_src_dir + "/待移动.md"
     recursive_dir = "Knowledge/__smoke__递归删除"
+    trash_doc = "Projects/__smoke__回收站文档.md"
+    trash_dir = "Knowledge/__smoke__回收站目录"
+    trash_nested_doc = trash_dir + "/子级/笔记.md"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -275,6 +294,84 @@ def main() -> int:
         code, _ = client.call("DELETE", f"/api/dirs/{enc_rec}")
         check("递归删除后再次删除返回 404", code == 404, f"-> {code}")
 
+        # 阶段十：删除改为移入回收站，可还原 / 彻底删除 / 清空
+        enc_tdoc = urllib.parse.quote(trash_doc, safe="/")
+        code, _ = client.call("PUT", f"/api/docs/{enc_tdoc}", {"content": "# 回收站测试\n"})
+        check("准备删除后进入回收站的文档", code == 200, f"-> {code}")
+        code, trashed = client.call("DELETE", f"/api/docs/{enc_tdoc}")
+        check("删除文档返回 trashed 与 trash_id", code == 200 and trashed
+              and trashed.get("trashed") is True and bool(trashed.get("trash_id")),
+              f"-> {code} {trashed}")
+        code, listing = client.call("GET", "/api/trash")
+        item = find_trash_item((listing or {}).get("items", []), trash_doc)
+        check("回收站列表出现该文档且带原路径/类型/时间", code == 200 and item
+              and item.get("type") == "file" and item.get("deleted_at")
+              and item.get("id") == trashed.get("trash_id"), f"-> {code} {item}")
+        code, _ = client.call("GET", f"/api/docs/{enc_tdoc}")
+        check("删除后原路径返回 404", code == 404, f"-> {code}")
+        code, restored = client.call("POST", "/api/trash/restore", {"id": trashed["trash_id"]})
+        check("从回收站还原文档到原路径", code == 200 and restored
+              and restored.get("restored") is True and restored.get("path") == trash_doc,
+              f"-> {code} {restored}")
+        code, raw = client.call("GET", f"/api/docs/{enc_tdoc}")
+        check("还原后内容完整可读", code == 200 and raw
+              and raw.get("content") == "# 回收站测试\n", f"-> {code}")
+        code, _ = client.call("POST", "/api/trash/restore", {"id": trashed["trash_id"]})
+        check("重复还原同一条目返回 404", code == 404, f"-> {code}")
+
+        code, second = client.call("DELETE", f"/api/docs/{enc_tdoc}")
+        check("再次删除文档生成新回收站条目", code == 200 and second
+              and second.get("trash_id") != trashed.get("trash_id"), f"-> {code} {second}")
+        code, _ = client.call("PUT", f"/api/docs/{enc_tdoc}", {"content": "# 占用原位置\n"})
+        code, _ = client.call("POST", "/api/trash/restore", {"id": second["trash_id"]})
+        check("原位置已被占用时还原返回 409", code == 409, f"-> {code}")
+        code, purged = client.call("DELETE", "/api/trash/" + second["trash_id"])
+        check("彻底删除单个回收站条目", code == 200 and purged
+              and purged.get("purged") is True, f"-> {code} {purged}")
+        code, listing = client.call("GET", "/api/trash")
+        check("彻底删除后回收站不再包含该条目", code == 200
+              and not any(i.get("id") == second["trash_id"]
+                          for i in (listing or {}).get("items", [])), f"-> {code}")
+
+        enc_tdir = urllib.parse.quote(trash_dir, safe="/")
+        code, _ = client.call("POST", f"/api/dirs/{enc_tdir}")
+        check("准备带子项的回收站目录", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/docs/{urllib.parse.quote(trash_nested_doc, safe='/')}",
+                              {"content": "# 深层笔记\n"})
+        check("回收站目录内创建嵌套文档", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/descriptions/{enc_tdir}", {"content": "随目录一起还原"})
+        code, dir_trashed = client.call("DELETE", f"/api/dirs/{enc_tdir}?recursive=true&confirm="
+                                        + urllib.parse.quote("__smoke__回收站目录"))
+        check("递归删除目录同样移入回收站", code == 200 and dir_trashed
+              and dir_trashed.get("trashed") is True
+              and dir_trashed.get("removed_docs") >= 1, f"-> {code} {dir_trashed}")
+        code, listing = client.call("GET", "/api/trash")
+        dir_item = find_trash_item((listing or {}).get("items", []), trash_dir)
+        check("回收站列表包含整个目录", code == 200 and dir_item
+              and dir_item.get("type") == "dir" and dir_item.get("recursive") is True,
+              f"-> {code} {dir_item}")
+        code, restored_dir = client.call("POST", "/api/trash/restore",
+                                         {"id": dir_trashed["trash_id"]})
+        check("还原整个目录（含子目录与文档）", code == 200 and restored_dir
+              and restored_dir.get("path") == trash_dir, f"-> {code} {restored_dir}")
+        code, _ = client.call("GET", f"/api/docs/{urllib.parse.quote(trash_nested_doc, safe='/')}")
+        check("还原后嵌套文档仍可访问", code == 200, f"-> {code}")
+        code, tree_restored = client.call("GET", "/api/tree")
+        restored_node = find_node(tree_restored.get("tree", []), trash_dir)
+        check("还原后目录说明一并恢复", code == 200 and restored_node
+              and restored_node.get("description") == "随目录一起还原", f"-> {code}")
+
+        code, _ = client.call("POST", "/api/trash/restore", {"id": "../evil"})
+        check("还原接口拒绝非法条目 ID", code == 400, f"-> {code}")
+        code, _ = client.call("DELETE", "/api/trash/__smoke__missing__")
+        check("彻底删除不存在的条目返回 404", code == 404, f"-> {code}")
+        code, emptied = client.call("DELETE", "/api/trash")
+        check("清空回收站返回删除条数", code == 200 and emptied
+              and emptied.get("purged") >= 1, f"-> {code} {emptied}")
+        code, listing = client.call("GET", "/api/trash")
+        check("清空后回收站为空", code == 200
+              and (listing or {}).get("count") == 0, f"-> {code} {listing}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -321,7 +418,7 @@ def main() -> int:
             server.wait(timeout=8)
         except subprocess.TimeoutExpired:
             server.kill()
-        for relative in (doc_a, doc_b, doc_in_dir):
+        for relative in (doc_a, doc_b, doc_in_dir, trash_doc):
             target = BASE_DIR / "data" / relative
             try:
                 if target.exists():
@@ -339,8 +436,11 @@ def main() -> int:
             "Knowledge/__smoke__递归删除",
             "Projects/__smoke__可移动目录",
             "Projects/__smoke__待删目录",
+            trash_dir,
         ):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+        shutil.rmtree(trash_dir, ignore_errors=True)
+        cleanup_test_trash(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

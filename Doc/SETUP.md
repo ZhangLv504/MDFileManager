@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -162,7 +162,7 @@ cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
 | `katex/fonts/*.woff2` | KaTeX **0.16.22**，20 个文件 | 数学符号与字形字体，离线渲染公式必需。 |
 | `../math.js`（项目自写，非第三方） | — | 为 marked 注册公式扩展：先把公式换成占位 `span`，等 DOMPurify 净化、Vue 挂载后再由 KaTeX 原地填充，避免 marked 的反斜杠转义破坏公式。 |
 
-引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～九均未引入新第三方库：拖拽整理使用浏览器原生 HTML5 Drag & Drop API，无额外依赖。
+引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～十均未引入新第三方库：拖拽整理使用浏览器原生 HTML5 Drag & Drop API，回收站使用 Python 标准库 `json` / `shutil` / `uuid`，无额外依赖。
 
 ---
 
@@ -204,42 +204,47 @@ py -3.12 -m venv .venv
 | `http://127.0.0.1:8000/api/health` | 健康检查，返回 `data/` 路径与基础分类 |
 | `GET /api/tree` | 目录树 JSON，目录节点含 `description` 字段 |
 | `POST /api/dirs/{目录路径}` | 新建目录（可含多级父目录），已存在时幂等返回 `created: false` |
-| `DELETE /api/dirs/{目录路径}` | 删除空目录（非空返回 409）；加 `?recursive=true&confirm=目录名` 时带名称确认递归删除全部内容 |
+| `DELETE /api/dirs/{目录路径}` | 删除空目录并移入回收站（非空返回 409）；加 `?recursive=true&confirm=目录名` 时带名称确认把整个目录移入回收站 |
 | `PATCH /api/rename` | 重命名文档或目录，请求体 `{path, new_name}`，只改名不移动 |
 | `PATCH /api/move` | 移动文档或目录，请求体 `{path, target_dir}`；`target_dir` 为空表示 `data/` 顶层（只允许目录） |
 | `PUT /api/descriptions/{目录路径}` | 写入目录作用说明，请求体 `{content}`，保存到该目录的 `.description.md` |
-| `GET / PUT / DELETE /api/docs/{分类}/{文件名}.md` | 读取 / 保存（覆盖）/ 删除 Markdown 文档 |
+| `GET / PUT / DELETE /api/docs/{分类}/{文件名}.md` | 读取 / 保存（覆盖）/ 删除 Markdown 文档（删除进回收站） |
+| `GET /api/trash` | 回收站列表，每条含 `id`、原路径、名称、类型、删除时间、文档数与大小 |
+| `POST /api/trash/restore` | 还原到原位置，请求体 `{id}`；原位置被占用时返回 409 |
+| `DELETE /api/trash/{id}` | 彻底删除单条回收站记录（不可恢复） |
+| `DELETE /api/trash` | 清空回收站（不可恢复），返回清除条数 |
 
 前端页面与 API 由**同一个 uvicorn 进程**提供，因此不存在跨域问题；页面里的 `fetch` 全部走相对路径 `/api/...`。
 
 ### 4.3 验证是否正常运行
 
 ```bash
-.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/递归删除 API：65/65
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：47/47
-.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：27/27
-.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/卡片：52/52
+.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/回收站 API：87/87
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：58/58
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：29/29
+.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/卡片：60/60
 ```
 
-四个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别验证文档页与目录页/卡片库的真实 DOM，不下载浏览器。
+四个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。`tests/trash_cleanup.py` 只清理带测试标记的回收站条目，不会碰用户真实删除记录；`smoke_test.py` 还通过 `MDFM_TRASH_DIR` 把回收站指向临时目录，专门验证跨盘移动与「清空回收站」。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别验证文档页与目录页/卡片库的真实 DOM，不下载浏览器。
 
 ### 4.4 关键目录
 
 ```text
 MDFileManager/
-├── main.py                 # FastAPI 应用：文档 CRUD + 目录增删 + 重命名 + 移动 + 递归删除 + 说明 + 静态托管
+├── main.py                 # FastAPI 应用：文档 CRUD + 目录增删 + 重命名 + 移动 + 回收站 + 说明 + 静态托管
 ├── requirements.txt        # Python 直接依赖
 ├── data/                   # 用户文档（.md 不入库，仅保留 .gitkeep）
+│   ├── .trash/             # 回收站（隐藏目录，不进目录树，也不入库）
 │   ├── Projects/
 │   │   └── .description.md # 可选的目录说明（隐藏文件，不出现在文档列表）
 │   └── Knowledge/
 ├── web/                    # 纯静态前端（无侧栏树、无递归卡片组件）
-│   ├── index.html          # 卡片库 / 目录页 / 文档页 + 对话框 + 右键菜单 + 拖放目标
-│   ├── app.js              # 交互逻辑（双击进入 / 面包屑 / 返回 / 右键 / 拖拽移动 / 增删 / 编辑 / 深链接）
+│   ├── index.html          # 卡片库 / 目录页 / 文档页 + 对话框 + 右键菜单 + 拖放目标 + 回收站面板
+│   ├── app.js              # 交互逻辑（双击进入 / 面包屑 / 返回 / 右键 / 拖拽移动 / 回收站 / 编辑 / 深链接）
 │   ├── math.js             # marked 公式扩展 + KaTeX 填充
 │   ├── style.css
 │   └── vendor/             # 已本地化的前端库（含 katex/fonts/*.woff2）
-├── tests/                  # 四个可运行验证脚本
+├── tests/                  # 四个可运行验证脚本 + trash_cleanup.py 测试清理工具
 └── Doc/                    # 需求、协作约定、进度、新会话指令与本指南
 ```
 
@@ -248,16 +253,17 @@ MDFileManager/
 - **三级视图**：一级「文档库」只显示目录卡片（名称、文档数、作用描述）；**双击卡片进入该目录的独立详情页**；在目录页单击文档进入文档页。顶栏「← 返回」按层级逐级回退，面包屑可直接跳到任一级。
 - **卡片不罗列内容**：一级卡片里不再平铺子目录和 `.md` 文档；子目录与文档只在各自的目录页中展示，分「文件夹」「文档」两区，均为 flex 流式布局，**文件夹在前、文档在后**。
 - **目录页**：显示面包屑、目录名、作用说明（可点「编辑说明」修改）与内容分块；双击文件夹进入下一级，单击文档打开；标题栏有「+ 文件夹」「+ 文档」快捷入口，直接以当前目录为位置新建。
-- **右键菜单**：目录可用「打开目录 / 重命名 / 移动到… / 在此新建文件夹 / 在此新建文档 / 编辑说明 / 删除目录 / 清空并删除目录…」；文档可用「打开文档 / 重命名 / 移动到… / 删除文档」。删除前有确认弹窗。
+- **右键菜单**：目录可用「打开目录 / 重命名 / 移动到… / 在此新建文件夹 / 在此新建文档 / 编辑说明 / 删除目录 / 清空并移入回收站…」；文档可用「打开文档 / 重命名 / 移动到… / 删除文档」。删除前有确认弹窗，删除后内容进回收站。
 - **移动与拖拽整理**：把目录页里的文件夹或文档**拖到另一个文件夹、面包屑上的任一级、目录页上方「移动到上级」区域，或卡片库的另一张卡片**上即可完成移动；也可右键「移动到…」在目录列表里选择目标（自动排除自身及其子目录）。移动成功后当前文档、所在目录、选中目录与地址栏深链接会自动同步。
-- **删除规则**：文档可直接删除；「删除目录」**仅空目录可删**（非空返回 409 并提示先清空或用递归删除）；「清空并删除目录…」用于递归删除，需**手动输入完整目录名**作为二次确认，后端也会再次校验该名称。递归删除会连同子目录、文档、`.description.md` 一起移除，且**不跟随符号链接**（发现符号链接直接拒绝），单次上限 2000 项。删除当前文档或当前所在目录后，视图自动回退到上级。
+- **删除规则**：文档可直接删除；「删除目录」**仅空目录可删**（非空返回 409 并提示先清空或用递归删除）；「清空并移入回收站…」用于整目录删除，需**手动输入完整目录名**作为二次确认，后端也会再次校验该名称。删除时连同子目录、文档、`.description.md` 一起移入回收站，且**不跟随符号链接**（发现符号链接直接拒绝），单次上限 2000 项。删除当前文档或当前所在目录后，视图自动回退到上级。
+- **回收站**：顶栏「回收站」按钮带条目数角标，面板列出原路径、名称、类型与删除时间，可「还原」到原位置（原位置被占用返回 409）、「彻底删除」单条或「清空回收站」。数据落在 `data/.trash/<id>/`（`payload/` 保存原内容，`meta.json` 保存原路径等元数据），是隐藏目录，不进目录树也不入库；可用环境变量 `MDFM_TRASH_DIR` 改到其他位置，跨磁盘时自动退化为「复制 + 删除源」。回收站上限 500 条，满时删除会返回 409 提示先清空。
 - **选中目录**：单击卡片或目录页里的文件夹可选中（高亮），「已选目录」显示在页面头部；未选中目录时顶栏「新建」只能建顶层目录，选中后可建子目录或 `.md` 文档。
 - **重命名**：文档名需 `.md` 结尾（省略自动补全），目录名不能以 `.md` 结尾；同名冲突返回 409，非法名称返回 400。重命名后当前目录、当前文档、选中目录与深链接会自动同步。
 - **端口被占用**：换端口 `--port 8001`，或简写启动时设置 `MDFM_PORT=8001`。
 - **换机器 / 依赖缺失**：重新执行 `py -3.12 -m venv .venv` 与 `pip install -r requirements.txt`；`.venv/` 被 `.gitignore` 忽略，不随仓库分发。前端库已随仓库提交，无需重新安装。
 - **离线使用**：前端库（含 KaTeX 字体）全部本地化，启动与渲染都无需联网；只有首次安装 Python 依赖时需要网络。
 - **分享链接**：进入文档或目录后地址栏会带上 `#/doc/...` 或 `#/dir/...`，复制即可直接打开。
-- **数据备份**：直接复制 `data/` 目录即可，没有数据库；递归删除不可撤销，重要内容请先备份。
+- **数据备份**：直接复制 `data/` 目录即可，没有数据库；「彻底删除」与「清空回收站」不可恢复，重要内容请先备份。
 
 ---
 
@@ -265,22 +271,25 @@ MDFileManager/
 
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
-| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 65/65 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 47/47 |
-| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 27/27 |
+| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 87/87 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 58/58 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 29/29 |
 | 阶段四 · 目录管理 | 无新增第三方库 | `POST /api/dirs` + 目录选中 + 分类新建 |
 | 阶段五 · 卡片与重命名 | 无新增第三方库 | 顶层卡片视图 + 右键重命名 + 目录说明 |
 | 阶段六 · 纯卡片导航 | 无新增第三方库 | 移除侧栏树 |
 | 阶段七 · 目录详情页 | 无新增第三方库 | 双击卡片进入独立目录页，卡片不再平铺内容 |
 | 阶段八 · 内容操作 | 无新增第三方库 | 空目录删除 + 右键菜单/目录页新建与删除 |
-| 阶段九 · 内容整理 | 无新增第三方库（原生 HTML5 Drag & Drop） | `PATCH /api/move` 移动 + 拖拽整理 + 带名称确认的递归删除；`tests/stage5_smoke_test.py` 52/52 |
+| 阶段九 · 内容整理 | 无新增第三方库（原生 HTML5 Drag & Drop） | `PATCH /api/move` 移动 + 拖拽整理 + 带名称确认的递归删除 |
+| 阶段十 · 回收站 | 无新增第三方库（标准库 json / shutil / uuid） | 删除改为移入回收站、列表/还原/彻底删除/清空、`MDFM_TRASH_DIR` 跨盘回退；`tests/stage5_smoke_test.py` 60/60 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
 
 - 公式支持行内 `$...$` 与块级 `$$...$$`；代码块中的 `$` 不解析；KaTeX 以 `throwOnError: false` 渲染，非法公式保留原文不中断页面。
 - 重命名只改名称、移动只改位置，两者都不改文件内容；移动会拒绝循环（目录移入自身或后代）、同名冲突 409、文档移到 `data/` 顶层、路径遍历与符号链接。
-- 递归删除需要输入完整目录名二次确认，且不跟随符号链接、单次上限 2000 项；**没有回收站与撤销**，删除后只能从备份恢复。
+- 删除先进回收站：普通删除可还原；递归删除仍需输入完整目录名二次确认，且不跟随符号链接、单次上限 2000 项。**只有「彻底删除」与「清空回收站」不可恢复**，回收站上限 500 条。
+- 回收站只记录原位置，不支持「还原到新位置」；若原位置已被同名条目占用，会返回 409，需先移开或重命名再还原。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览通过双击进入目录页；深链接仍可直达文档或目录。
+- 文档版本历史仍未实现——按业务定义，同名覆盖即视为版本更新。
 - 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时对应脚本会跳过或失败，但其余脚本与项目本身不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。

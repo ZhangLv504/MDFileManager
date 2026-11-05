@@ -22,6 +22,9 @@ import urllib.request
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trash_cleanup import cleanup_test_trash  # noqa: E402
+
 WEB_DIR = BASE_DIR / "web"
 TEST_DIR = "Projects/__stage5__目录"
 RENAMED_DIR = "Projects/__stage5__已改名"
@@ -161,7 +164,14 @@ def main() -> int:
           and ".tiles {" in style_css)
     check("页面提供移动到对话框与递归删除菜单",
           "showMove" in index_html and "dir-list" in index_html
-          and "清空并删除目录" in index_html and 'draggable="true"' in index_html)
+          and "清空并移入回收站" in index_html and 'draggable="true"' in index_html)
+    check("页面提供回收站面板与角标入口",
+          ">回收站<" in index_html and "showTrash" in index_html
+          and "trash-badge" in index_html and "restoreTrash(item.id)" in index_html
+          and "emptyTrash" in index_html)
+    check("交互逻辑接入回收站接口",
+          "'/api/trash'" in app_js and "'/api/trash/restore'" in app_js
+          and "refreshTrashCount" in app_js and "loadTrash" in app_js)
     check("交互逻辑接入移动与拖拽整理",
           "'/api/move'" in app_js and "moveEntry" in app_js
           and "recursive=true" in app_js and "onDrop" in app_js
@@ -259,6 +269,26 @@ def main() -> int:
         deleted = as_json(raw)
         check("删除空目录接口可用", code == 200 and deleted
               and deleted.get("deleted") is True, f"-> {code} {raw[:120]}")
+        check("删除空目录返回回收站编号", bool(deleted)
+              and deleted.get("trashed") is True and bool(deleted.get("trash_id")),
+              f"-> {raw[:120]}")
+        code, raw = fetch(base_url, "/api/trash")
+        listing = as_json(raw) or {}
+        check("回收站列表包含该空目录", code == 200
+              and any(item.get("original_path") == empty_del_dir
+                      for item in listing.get("items", [])), f"-> {code} {raw[:150]}")
+        check("回收站列表返回条目总数", isinstance(listing.get("count"), int), f"-> {raw[:80]}")
+        code, raw = fetch(base_url, "/api/trash/restore", "POST", {"id": deleted["trash_id"]})
+        restored = as_json(raw)
+        check("还原空目录到原位置", code == 200 and restored
+              and restored.get("path") == empty_del_dir, f"-> {code} {raw[:150]}")
+        code, _ = fetch(base_url, "/api/trash/restore", "POST", {"id": "../evil"})
+        check("还原接口拒绝非法条目 ID", code == 400, f"-> {code}")
+        code, raw = fetch(base_url, "/api/dirs/" + quote(empty_del_dir), "DELETE")
+        second = as_json(raw) or {}
+        code, raw = fetch(base_url, "/api/trash/" + second.get("trash_id", "__none__"), "DELETE")
+        check("彻底删除单个回收站条目", code == 200
+              and (as_json(raw) or {}).get("purged") is True, f"-> {code} {raw[:120]}")
         code, _ = fetch(base_url, "/api/dirs/" + quote(RENAMED_DIR), "DELETE")
         check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
 
@@ -331,6 +361,7 @@ def main() -> int:
     finally:
         for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET, "Projects/__stage5__空目录"):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+        cleanup_test_trash(BASE_DIR)
         server.terminate()
         try:
             server.wait(timeout=8)

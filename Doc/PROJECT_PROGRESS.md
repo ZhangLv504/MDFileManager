@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～九均已完成并通过验证；九个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`。
+> 状态：阶段一～十均已完成并通过验证；十个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`。
 
 ## 核心需求与阶段划分
 
@@ -53,6 +53,16 @@
   - 移动 / 删除后自动同步 `currentPath`、`activeDirPath`、`selectedDir` 与地址栏深链接（`syncHash` 统一以当前文档优先）。
 - **输出**：`main.py` 两个新能力、前端拖放与对话框、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段十：回收站与删除可恢复
+- **目标**：补齐上一阶段结尾标注的「不可撤销、没有回收站」缺口，让普通删除与递归删除都可还原。
+- **机制**：
+  - `DELETE /api/docs/{path}` 与 `DELETE /api/dirs/{path}`（含 `recursive=true`）不再直接抹除，而是把整个条目移到 `data/.trash/<id>/payload/<原名>`，并写 `meta.json` 记录原路径、名称、类型、删除时间、是否递归、文档数与大小；返回 `trashed: true` 与 `trash_id`。`.trash` 是隐藏目录，`_scan` 自动跳过，不进目录树、不入库。
+  - 新增 `GET /api/trash`（列表）、`POST /api/trash/restore`（还原到原位置，占用时 409）、`DELETE /api/trash/{id}`（彻底删除单条）、`DELETE /api/trash`（清空）。条目 ID 用白名单校验并 `resolve()` 限制在 `.trash/` 内；写元数据失败会自动把内容移回原处。
+  - `_move_path` 统一处理移动：`os.rename` 遇到跨盘 / 跨文件系统（WinError 17 / `EXDEV`）时退化为「复制 + 删除源」，因此可用 `MDFM_TRASH_DIR` 把回收站放到其他磁盘。
+  - 前端顶栏「回收站」按钮带条目数角标，面板支持列表 / 还原 / 彻底删除 / 清空；删除确认与提示文案改为「先进回收站，可还原」；右键「清空并删除目录…」改为「清空并移入回收站…」。
+  - 回收站上限 500 条，满时删除返回 409；`tests/trash_cleanup.py` 只清理带测试标记的条目，不动用户真实记录。
+- **输出**：`main.py` 回收站能力、前端面板与文案、四套验证脚本扩充。未引入新第三方库。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -90,6 +100,10 @@
 - 后端 `PATCH /api/move` 与 `DELETE /api/dirs/{path}?recursive=true&confirm=...`；前端移动到对话框、原生拖放整理、递归删除二次确认与路径自动同步。
 - 四套验证全绿：`tests/smoke_test.py` **65/65**、`tests/frontend_smoke_test.py` **47/47**、`tests/browser_smoke_test.py` **27/27**、`tests/stage5_smoke_test.py` **52/52**。
 
+### 阶段十 · 回收站（`stage-10-recycle-bin`）
+- 删除改为移入 `data/.trash/`，`GET /api/trash` / `POST /api/trash/restore` / `DELETE /api/trash[/{id}]` 四个接口；顶栏回收站面板支持还原、彻底删除与清空；跨盘移动自动回退。
+- 四套验证全绿：`tests/smoke_test.py` **87/87**、`tests/frontend_smoke_test.py` **58/58**、`tests/browser_smoke_test.py` **29/29**、`tests/stage5_smoke_test.py` **60/60**。
+
 ### 运行方式
 
 ```bash
@@ -110,8 +124,9 @@ py -3.12 -m venv .venv
 ## 当前能力边界
 
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
-- 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的递归删除」两种模式。
-- 递归删除不可撤销、无回收站，且不跟随符号链接、单次上限 2000 项；重要数据请先复制 `data/` 备份。
+- 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的整目录删除」两种模式。
+- 删除先进回收站，可还原；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；还原只能回原位置，冲突返回 409。
+- 文档版本历史仍未实现——按业务定义，同名覆盖即视为版本更新。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。
