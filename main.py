@@ -257,6 +257,15 @@ def delete_doc(doc_path: str) -> dict[str, Any]:
     return {"path": rel, "deleted": True}
 
 
+# 阶段二：同一进程托管纯静态前端页面。
+# 已注册的 /api/*、/docs、/openapi.json 路由优先于该根挂载被匹配。
+WEB_DIR = BASE_DIR / "web"
+if WEB_DIR.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+
+
 if __name__ == "__main__":
     import uvicorn
 

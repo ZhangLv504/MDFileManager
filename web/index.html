@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MDFileManager · Markdown 文档管理</title>
+<link rel="stylesheet" href="/vendor/github-markdown-light.css">
+<link rel="stylesheet" href="/vendor/highlight-light.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app" v-cloak>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">MD</span>
+      <div class="brand-text">
+        <h1>MDFileManager</h1>
+        <p>本地 Markdown 文档管理</p>
+      </div>
+    </div>
+    <div class="current">
+      <span class="label">当前文档</span>
+      <strong>{{ currentPath || '未选择' }}</strong>
+    </div>
+    <div class="actions">
+      <span class="status" :class="backendOk ? 'ok' : 'bad'">{{ backendOk ? '后端已连接' : '后端未连接' }}</span>
+      <button class="btn" @click="refreshTree">刷新</button>
+      <button class="btn" @click="openNewDialog">新建</button>
+      <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
+      <button class="btn primary" :disabled="!currentPath || saving" @click="saveDoc">{{ saving ? '保存中…' : '保存' }}<kbd>Ctrl+S</kbd></button>
+      <button class="btn danger" :disabled="!currentPath" @click="deleteDoc">删除</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar">
+      <div class="side-head"><span>文档分类</span><span class="count">{{ docCount }} 篇</span></div>
+      <div class="tree" v-if="tree.length">
+        <tree-node v-for="node in tree" :key="node.path" :node="node" :current="currentPath" :expanded="expanded" :depth="0" @select="selectDoc" @toggle="toggleNode"></tree-node>
+      </div>
+      <div class="tree-empty" v-else>暂无文档，点击「新建」创建第一篇。</div>
+      <div class="side-foot">数据目录：<code>data/</code><br>同名保存即覆盖更新</div>
+    </aside>
+
+    <main class="main">
+      <div class="notice" v-if="notice" :class="notice.type">{{ notice.text }}</div>
+
+      <div class="editor-split" v-if="editing && currentPath">
+        <section class="pane">
+          <div class="pane-head"><span>Markdown 源码</span><span class="dirty" v-if="dirty">未保存</span></div>
+          <textarea v-model="content" spellcheck="false" placeholder="# 开始写作"></textarea>
+        </section>
+        <section class="pane preview-pane">
+          <div class="pane-head"><span>实时预览</span><span class="hint">marked + highlight.js</span></div>
+          <article class="markdown-body" v-html="renderedHtml"></article>
+        </section>
+      </div>
+
+      <div class="viewer" v-else-if="currentPath">
+        <article class="markdown-body" v-html="renderedHtml"></article>
+      </div>
+
+      <div class="placeholder" v-else>
+        <div class="placeholder-mark">MD</div>
+        <h2>从左侧选择一篇文档</h2>
+        <p>或点击「新建」创建一篇 Markdown 文档。</p>
+        <p class="hint">标题、表格、代码块与公式均按标准 Markdown 渲染。</p>
+      </div>
+    </main>
+  </div>
+
+  <div class="dialog-mask" v-if="showNew" @click.self="showNew = false">
+    <div class="dialog">
+      <h3>新建 Markdown 文档</h3>
+      <p>填写分类路径与文件名，不存在的父目录会自动创建。</p>
+      <input ref="newPathInput" v-model="newPath" @keyup.enter="createDoc" placeholder="Projects/新文档.md">
+      <div class="dialog-hint">必须以 .md 结尾，例如 <code>Knowledge/前端/渲染说明.md</code></div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showNew = false">取消</button>
+        <button class="btn primary" @click="createDoc">创建</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="text/x-template" id="tree-node-tpl">
+  <div class="tree-node">
+    <div class="tree-row" :class="{ dir: node.type === 'dir', active: current === node.path }" :style="{ paddingLeft: (10 + depth * 14) + 'px' }" @click="onClick">
+      <span class="twisty" v-if="node.type === 'dir'">{{ expanded[node.path] ? '▾' : '▸' }}</span>
+      <span class="bullet" v-else>·</span>
+      <span class="name" :title="node.path">{{ node.name }}</span>
+      <span class="size" v-if="node.type === 'file'">{{ node.size }} B</span>
+    </div>
+    <template v-if="node.type === 'dir' && expanded[node.path]">
+      <tree-node v-for="child in node.children" :key="child.path" :node="child" :current="current" :expanded="expanded" :depth="depth + 1" @select="$emit('select', $event)" @toggle="$emit('toggle', $event)"></tree-node>
+    </template>
+  </div>
+</script>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script src="/vendor/highlight.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

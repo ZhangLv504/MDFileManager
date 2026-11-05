@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：刚完成需求设计与架构规划；当前处于**阶段一（准备启动）**。
+> 状态：阶段一、阶段二均已完成并通过端到端验证；代码分别位于 `stage-1-backend` 与 `stage-2-frontend` 分支。
 
 ## 核心需求与阶段划分
 
@@ -29,5 +29,32 @@
 2. **安全第一**：后端在处理 `category` 和 `filename` 参数时，必须过滤 `..` 等路径跳转字符，防止读取或覆盖系统文件。
 3. **无缝热更新与渲染**：前端保存操作为无刷新异步提交，更新成功后需同步刷新视图中的 Markdown 渲染效果。
 
-## 当前唯一目标
-**直接生成阶段一的后端完整代码**，包括基于 FastAPI 的应用初始化、数据目录的自动创建机制，以及获取目录树、获取文件内容、保存（新增/覆盖）文件、删除文件四个核心 RESTful API，并确保对中文文件名和路径遍历漏洞有基础防御。
+## 交付记录
+
+### 阶段一 · 后端（`stage-1-backend`，提交 `1446cbd`）
+- `main.py`：FastAPI 应用；`data/Projects`、`data/Knowledge` 自动创建；`GET /api/tree`、`GET /api/docs/{path}`、`PUT /api/docs/{path}`、`DELETE /api/docs/{path}`；UTF-8 原子写入、中文文件名、路径遍历与符号链接逃逸防御、大小限制。
+- `tests/smoke_test.py`：自动拉起 uvicorn 的端到端验证，**25/25 项通过**。
+
+### 阶段二 · 前端（`stage-2-frontend`）
+- `web/`：Vue3 + TS/JS 独立静态页；递归文档树、marked + DOMPurify + highlight.js 高保真渲染、源码与实时预览双栏编辑、新建 / 保存 / 删除全部为无刷新异步提交；渲染依赖已本地化到 `web/vendor/`，离线可用。
+- `main.py` 追加根路径静态托管，`/api/*` 与 `/docs` 优先匹配。
+- `tests/frontend_smoke_test.py`：页面、静态资源、marked 渲染输出、API 联动验证，**22/22 项通过**；阶段一回归 25/25 仍通过。
+
+### 运行方式
+
+```bash
+py -3.12 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+浏览器打开 `http://127.0.0.1:8000/`，接口文档 `http://127.0.0.1:8000/docs`。
+
+```bash
+.venv/Scripts/python.exe tests/smoke_test.py
+.venv/Scripts/python.exe tests/frontend_smoke_test.py
+```
+
+### 已知待办
+- README 提到的数学公式渲染尚未接入（需引入 KaTeX 等本地化依赖），当前阶段二覆盖标题、表格、加粗、列表、引用、代码块高亮。
+- 前端交互暂未做真实浏览器自动化验证，现有验证覆盖 HTTP 层、静态资源、JS 语法与渲染引擎输出。
