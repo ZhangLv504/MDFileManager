@@ -100,7 +100,7 @@
 - 后端 `PATCH /api/move` 与 `DELETE /api/dirs/{path}?recursive=true&confirm=...`；前端移动到对话框、原生拖放整理、递归删除二次确认与路径自动同步。
 - 四套验证全绿：`tests/smoke_test.py` **65/65**、`tests/frontend_smoke_test.py` **47/47**、`tests/browser_smoke_test.py` **27/27**、`tests/stage5_smoke_test.py` **52/52**。
 
-### 阶段十 · 回收站（`stage-10-recycle-bin`）
+### 阶段十 · 回收站（`stage-10-recycle-bin`，提交 `ee290e9`）
 - 删除改为移入 `data/.trash/`，`GET /api/trash` / `POST /api/trash/restore` / `DELETE /api/trash[/{id}]` 四个接口；顶栏回收站面板支持还原、彻底删除与清空；跨盘移动自动回退。
 - 四套验证全绿：`tests/smoke_test.py` **87/87**、`tests/frontend_smoke_test.py` **58/58**、`tests/browser_smoke_test.py` **29/29**、`tests/stage5_smoke_test.py` **60/60**。
 
