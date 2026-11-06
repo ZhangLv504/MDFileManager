@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`（`3038db1`）。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---

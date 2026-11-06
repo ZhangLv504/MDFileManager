@@ -114,7 +114,7 @@
 - 删除改为移入 `data/.trash/`，`GET /api/trash` / `POST /api/trash/restore` / `DELETE /api/trash[/{id}]` 四个接口；顶栏回收站面板支持还原、彻底删除与清空；跨盘移动自动回退。
 - 四套验证全绿：`tests/smoke_test.py` **87/87**、`tests/frontend_smoke_test.py` **58/58**、`tests/browser_smoke_test.py` **29/29**、`tests/stage5_smoke_test.py` **60/60**。
 
-### 阶段十一 · 版本历史（`stage-11-version-history`）
+### 阶段十一 · 版本历史（`stage-11-version-history`，提交 `3038db1`）
 - 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史；`data/.history/` 隐藏目录不入库。
 - 四套验证全绿：`tests/smoke_test.py` **110/110**、`tests/frontend_smoke_test.py` **65/65**、`tests/browser_smoke_test.py` **31/31**、`tests/stage5_smoke_test.py` **66/66**。
 
