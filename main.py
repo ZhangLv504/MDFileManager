@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,15 @@ DESCRIPTION_FILE = ".description.md"
 MAX_NAME_BYTES = 200
 MAX_RECURSIVE_ITEMS = 2000
 MAX_TRASH_ITEMS = 500
+# 版本历史：.history/index.json 记录每个文档路径的版本列表，blobs/<id>.md 存快照。
+HISTORY_ROOT = Path(
+    os.environ.get("MDFM_HISTORY_DIR") or str(DATA_ROOT / ".history")
+).resolve()
+HISTORY_INDEX = "index.json"
+HISTORY_BLOBS = "blobs"
+MAX_VERSIONS_PER_DOC = 50
+MAX_HISTORY_DOCS = 500
+MAX_HISTORY_BYTES = 50 * 1024 * 1024
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
 _FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"|?*\\]')
@@ -61,6 +71,7 @@ def _ensure_data_root() -> None:
     """启动时自动创建数据根目录与基础分类目录。"""
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    (HISTORY_ROOT / HISTORY_BLOBS).mkdir(parents=True, exist_ok=True)
     for category in DEFAULT_CATEGORIES:
         (DATA_ROOT / category).mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +80,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.4.0",
+    version="1.5.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -287,6 +298,145 @@ def _move_path(source: Path, destination: Path) -> None:
         source.unlink()
 
 
+HISTORY_LOCK = threading.Lock()
+
+
+def _history_index_path() -> Path:
+    return HISTORY_ROOT / HISTORY_INDEX
+
+
+def _history_read() -> dict[str, Any]:
+    path = _history_index_path()
+    if not path.is_file():
+        return {"docs": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"docs": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("docs"), dict):
+        return {"docs": {}}
+    return data
+
+
+def _history_write(index: dict[str, Any]) -> None:
+    _atomic_write(_history_index_path(),
+                  json.dumps(index, ensure_ascii=False).encode("utf-8"))
+
+
+def _history_blob_path(version_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", version_id or ""):
+        raise _bad_request("版本 ID 非法")
+    target = (HISTORY_ROOT / HISTORY_BLOBS / (version_id + ".md")).resolve()
+    try:
+        target.relative_to((HISTORY_ROOT / HISTORY_BLOBS).resolve())
+    except ValueError:
+        raise _bad_request("版本文件越出历史目录")
+    return target
+
+
+def _history_drop_entries(entries: list[dict[str, Any]]) -> None:
+    for entry in entries:
+        try:
+            _history_blob_path(str(entry.get("id", ""))).unlink(missing_ok=True)
+        except (OSError, HTTPException):
+            pass
+
+
+def _history_renumber(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    entries = sorted(entries, key=lambda item: str(item.get("created_at", "")))
+    if len(entries) > MAX_VERSIONS_PER_DOC:
+        _history_drop_entries(entries[:len(entries) - MAX_VERSIONS_PER_DOC])
+        entries = entries[len(entries) - MAX_VERSIONS_PER_DOC:]
+    for number, entry in enumerate(entries, start=1):
+        entry["version"] = number
+    return entries
+
+
+def _history_prune_global(index: dict[str, Any]) -> None:
+    docs = index["docs"]
+    while len(docs) > MAX_HISTORY_DOCS:
+        oldest = min(docs, key=lambda key: str(docs[key][-1].get("created_at", ""))
+                     if docs[key] else "")
+        _history_drop_entries(docs.pop(oldest, []))
+    total = sum(entry.get("size", 0)
+                for entries in docs.values() for entry in entries)
+    while total > MAX_HISTORY_BYTES:
+        candidates = [(entry.get("created_at", ""), path, entry)
+                      for path, entries in docs.items() for entry in entries]
+        if not candidates:
+            break
+        _, path, victim = min(candidates, key=lambda item: str(item[0]))
+        docs[path] = [entry for entry in docs[path] if entry is not victim]
+        if not docs[path]:
+            docs.pop(path, None)
+        _history_drop_entries([victim])
+        total -= victim.get("size", 0)
+    for path, entries in list(docs.items()):
+        docs[path] = _history_renumber(entries)
+
+
+def _history_append(rel: str, content: bytes, *, action: str,
+                    from_version: str | None = None) -> dict[str, Any]:
+    """把一次保存的内容写成版本快照；同名覆盖即一个版本，重复保存相同内容不新增。"""
+    with HISTORY_LOCK:
+        index = _history_read()
+        version_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+            + "-" + uuid.uuid4().hex[:6]
+        )
+        _atomic_write(_history_blob_path(version_id), content)
+        entry: dict[str, Any] = {
+            "id": version_id,
+            "version": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "size": len(content),
+            "action": action,
+        }
+        if from_version:
+            entry["from_version"] = from_version
+        entries = list(index["docs"].get(rel, []))
+        entries.append(entry)
+        index["docs"][rel] = _history_renumber(entries)
+        _history_prune_global(index)
+        _history_write(index)
+        current = index["docs"].get(rel, [])
+        result = dict(entry)
+        result["count"] = len(current)
+        return result
+
+
+def _history_repath(old_path: str, new_path: str, *, is_dir: bool) -> None:
+    """重命名/移动后迁移历史键；目录会连带迁移其下所有文档。"""
+    with HISTORY_LOCK:
+        index = _history_read()
+        docs = index["docs"]
+        changed = False
+        for path in list(docs.keys()):
+            if is_dir:
+                if path != old_path and not path.startswith(old_path + "/"):
+                    continue
+                new_key = new_path + path[len(old_path):]
+            else:
+                if path != old_path:
+                    continue
+                new_key = new_path
+            if new_key == path:
+                continue
+            moving = docs.pop(path)
+            if new_key in docs:
+                docs[new_key] = _history_renumber(docs[new_key] + moving)
+            else:
+                docs[new_key] = moving
+            changed = True
+        if changed:
+            _history_write(index)
+
+
+def _history_entries(rel: str) -> list[dict[str, Any]]:
+    with HISTORY_LOCK:
+        return list(_history_read()["docs"].get(rel, []))
+
+
 def _trash_item_dir(item_id: str) -> Path:
     """回收站条目 ID 只允许安全字符，且解析后必须仍在 .trash/ 内。"""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", item_id or ""):
@@ -428,6 +578,11 @@ class RestorePayload(BaseModel):
     id: str = Field(..., description="回收站条目 ID")
 
 
+class VersionRestorePayload(BaseModel):
+    path: str = Field(..., description="文档相对路径")
+    version_id: str = Field(..., description="要还原的版本 ID")
+
+
 class DescriptionPayload(BaseModel):
     content: str = Field(..., description="目录作用说明文本")
 
@@ -448,6 +603,85 @@ def get_tree() -> dict[str, Any]:
         "tree": _scan(DATA_ROOT, Path()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/versions/{version_id}", summary="读取某个历史版本的 Markdown 源码")
+def read_version(version_id: str) -> dict[str, Any]:
+    blob = _history_blob_path(version_id)
+    if not blob.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="版本不存在")
+    try:
+        content = blob.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取版本失败：{exc}",
+        ) from exc
+    return {"version_id": version_id, "content": content, "size": len(content.encode("utf-8"))}
+
+
+@app.post("/api/history/restore", summary="把文档还原到指定历史版本（会生成新版本）")
+def restore_version(payload: VersionRestorePayload) -> dict[str, Any]:
+    target, rel = _parse_doc_path(payload.path)
+    if not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在：{rel}")
+    entries = _history_entries(rel)
+    if not any(entry.get("id") == payload.version_id for entry in entries):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该版本不属于此文档或已被清理",
+        )
+    blob = _history_blob_path(payload.version_id)
+    if not blob.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="版本快照缺失")
+    try:
+        data = blob.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取版本失败：{exc}",
+        ) from exc
+    if len(data) > MAX_DOC_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="历史版本超过当前文档大小上限",
+        )
+    _atomic_write(target, data)
+    new_version = _history_append(rel, data, action="restore",
+                                  from_version=payload.version_id)
+    return {
+        "path": rel, "restored": True,
+        "from_version": payload.version_id,
+        "version": new_version["id"], "version_number": new_version["version"],
+        "size": len(data),
+    }
+
+
+@app.get("/api/history/{doc_path:path}", summary="列出文档的全部历史版本")
+def list_history(doc_path: str) -> dict[str, Any]:
+    _, rel = _parse_doc_path(doc_path)
+    entries = _history_entries(rel)
+    versions = [
+        {key: entry.get(key) for key in
+         ("id", "version", "created_at", "size", "action", "from_version")}
+        for entry in entries
+    ]
+    versions.sort(key=lambda item: item["version"] or 0, reverse=True)
+    return {
+        "path": rel, "versions": versions,
+        "count": len(versions), "max_versions": MAX_VERSIONS_PER_DOC,
+    }
+
+
+@app.delete("/api/history/{doc_path:path}", summary="清空某篇文档的全部历史版本")
+def clear_history(doc_path: str) -> dict[str, Any]:
+    _, rel = _parse_doc_path(doc_path)
+    with HISTORY_LOCK:
+        index = _history_read()
+        entries = index["docs"].pop(rel, [])
+        _history_drop_entries(entries)
+        _history_write(index)
+    return {"path": rel, "cleared": len(entries)}
 
 
 @app.get("/api/trash", summary="列出回收站条目（可还原或彻底删除）")
@@ -628,6 +862,7 @@ def rename_entry(payload: RenamePayload) -> dict[str, Any]:
             detail=f"重命名失败：{exc}",
         ) from exc
     new_rel = (Path(rel).parent / name).as_posix()
+    _history_repath(rel, new_rel, is_dir=not is_file)
     return {
         "old_path": rel,
         "path": new_rel,
@@ -683,6 +918,7 @@ def move_entry(payload: MovePayload) -> dict[str, Any]:
             detail=f"移动失败：{exc}",
         ) from exc
     new_rel = new_target.resolve().relative_to(DATA_ROOT).as_posix()
+    _history_repath(rel, new_rel, is_dir=not is_file)
     return {
         "old_path": rel,
         "path": new_rel,
@@ -744,11 +980,23 @@ def save_doc(doc_path: str, payload: DocPayload) -> dict[str, Any]:
             status_code=status.HTTP_409_CONFLICT,
             detail="目标路径不是文件",
         )
+    unchanged = False
+    if existed:
+        try:
+            unchanged = target.read_bytes() == data
+        except OSError:
+            unchanged = False
     _atomic_write(target, data)
+    version = None
+    if not unchanged:
+        version = _history_append(rel, data,
+                                  action="updated" if existed else "created")
     return {
         "path": rel,
         "action": "updated" if existed else "created",
         "size": len(data),
+        "version": version["id"] if version else None,
+        "version_number": version["version"] if version else None,
     }
 
 

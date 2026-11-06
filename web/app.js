@@ -124,6 +124,13 @@
         trashItems: [],
         trashCount: 0,
         trashBusy: false,
+        showHistory: false,
+        historyPath: '',
+        historyVersions: [],
+        selectedVersion: '',
+        versionContent: '',
+        versionSame: null,
+        historyBusy: false,
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null,
@@ -177,6 +184,9 @@
           return { name: name, path: acc.join('/') };
         });
       },
+      latestVersionNumber: function () {
+        return this.historyVersions.length ? this.historyVersions[0].version : 0;
+      },
       parentDirPath: function () {
         if (!this.activeDirPath) return '';
         var index = this.activeDirPath.lastIndexOf('/');
@@ -226,7 +236,17 @@
 
     watch: {
       renderedHtml: function () { Vue.nextTick(decorate); },
-      editing: function () { Vue.nextTick(decorate); }
+      editing: function () { Vue.nextTick(decorate); },
+      currentPath: function () {
+        if (this.showHistory && this.currentPath !== this.historyPath) {
+          this.showHistory = false;
+        }
+      },
+      content: function () {
+        if (this.selectedVersion && this.versionContent !== '') {
+          this.versionSame = this.versionContent === this.content;
+        }
+      }
     },
 
     mounted: function () {
@@ -347,6 +367,95 @@
           this.notify('清空回收站失败：' + error.message, 'error');
         } finally {
           this.trashBusy = false;
+        }
+      },
+
+      versionLabel: function (action) {
+        if (action === 'created') return '创建';
+        if (action === 'restore') return '还原';
+        return '保存';
+      },
+
+      openHistory: async function () {
+        if (!this.currentPath) return;
+        this.historyPath = this.currentPath;
+        this.selectedVersion = '';
+        this.versionContent = '';
+        this.versionSame = null;
+        this.showHistory = true;
+        await this.loadHistory();
+      },
+
+      loadHistory: async function () {
+        if (!this.historyPath) return;
+        try {
+          var data = await api('GET', '/api/history/' + encodePath(this.historyPath));
+          this.historyVersions = data.versions || [];
+          if (this.selectedVersion
+              && !this.historyVersions.some(function (item) {
+                return item.id === this.selectedVersion;
+              }, this)) {
+            this.selectedVersion = '';
+            this.versionContent = '';
+            this.versionSame = null;
+          }
+        } catch (error) {
+          this.notify('历史版本加载失败：' + error.message, 'error');
+        }
+      },
+
+      previewVersion: async function (versionId) {
+        if (this.historyBusy) return;
+        this.historyBusy = true;
+        try {
+          var data = await api('GET', '/api/versions/' + encodeURIComponent(versionId));
+          this.selectedVersion = versionId;
+          this.versionContent = data.content || '';
+          this.versionSame = this.versionContent === this.content;
+        } catch (error) {
+          this.notify('读取版本失败：' + error.message, 'error');
+        } finally {
+          this.historyBusy = false;
+        }
+      },
+
+      restoreVersion: async function () {
+        if (!this.selectedVersion || this.historyBusy) return;
+        if (!window.confirm('把文档还原到所选版本？当前内容会保留为一个新的历史版本。')) return;
+        this.historyBusy = true;
+        try {
+          var result = await api('POST', '/api/history/restore',
+            { path: this.historyPath, version_id: this.selectedVersion });
+          var data = await api('GET', '/api/docs/' + encodePath(this.historyPath));
+          this.currentPath = data.path;
+          this.content = data.content;
+          this.original = data.content;
+          await this.loadHistory();
+          await this.refreshTree();
+          this.versionSame = this.versionContent === this.content;
+          this.notify('已还原到 v' + result.version_number + '（生成新版本）', 'success');
+        } catch (error) {
+          this.notify('还原版本失败：' + error.message, 'error');
+        } finally {
+          this.historyBusy = false;
+        }
+      },
+
+      clearHistory: async function () {
+        if (this.historyBusy) return;
+        if (!window.confirm('清空这篇文档的全部历史版本？不可恢复。')) return;
+        this.historyBusy = true;
+        try {
+          await api('DELETE', '/api/history/' + encodePath(this.historyPath));
+          this.selectedVersion = '';
+          this.versionContent = '';
+          this.versionSame = null;
+          await this.loadHistory();
+          this.notify('历史版本已清空', 'success');
+        } catch (error) {
+          this.notify('清空历史失败：' + error.message, 'error');
+        } finally {
+          this.historyBusy = false;
         }
       },
 
@@ -707,7 +816,13 @@
         try {
           var result = await api('PUT', '/api/docs/' + encodePath(this.currentPath), { content: this.content });
           this.original = this.content;
-          this.notify(result.action === 'created' ? '已创建并保存' : '已覆盖更新并保存', 'success');
+          if (this.showHistory && this.historyPath === this.currentPath) {
+            await this.loadHistory();
+          }
+          this.notify(result.version
+            ? (result.action === 'created' ? '已创建并保存' : '已覆盖更新并保存')
+              + '（v' + result.version_number + '）'
+            : '内容未变化，未新增历史版本', 'success');
           await this.refreshTree();
         } catch (error) {
           this.notify('保存失败：' + error.message, 'error');

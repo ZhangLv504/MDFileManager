@@ -265,6 +265,36 @@ body {
 .trash-actions { flex: none; display: flex; gap: 6px; }
 .trash-actions .btn { height: 28px; padding: 0 9px; font-size: 12px; }
 .trash-empty { padding: 28px; font-size: 13px; color: var(--muted); text-align: center; }
+.history-dialog { width: 780px; }
+.history-body { display: flex; gap: 12px; min-height: 300px; }
+.history-list {
+  width: 230px; flex: none; max-height: 340px; overflow: auto; padding: 4px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fafbfc;
+}
+.history-list button {
+  display: flex; flex-direction: column; gap: 3px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.history-list button:hover { background: var(--accent-soft); }
+.history-list button.active { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.history-list strong { font-size: 13px; font-weight: 500; }
+.history-list small { font-size: 11px; color: var(--muted); }
+.history-preview {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fafbfc;
+}
+.history-preview-head {
+  flex: none; display: flex; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border-bottom: 1px solid var(--line);
+  font-size: 11px; color: var(--muted); background: #fff;
+}
+.history-preview pre {
+  flex: 1; margin: 0; padding: 12px; overflow: auto; max-height: 300px;
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  font-family: "Cascadia Code", "Consolas", "Microsoft YaHei", monospace;
+  color: var(--text); background: #fafbfc;
+}
 
 .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
 .markdown-body .math-placeholder { color: var(--muted); }

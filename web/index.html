@@ -28,6 +28,7 @@
       <button class="btn" v-if="currentPath || activeDirPath" @click="goBack">← 返回</button>
       <button class="btn" @click="refreshTree">刷新</button>
       <button class="btn" @click="openTrash" title="删除的文档与目录会先移入回收站，可还原">回收站<span class="trash-badge" v-if="trashCount">{{ trashCount }}</span></button>
+      <button class="btn" :disabled="!currentPath" @click="openHistory" title="查看当前文档的保存历史并还原旧版本">历史</button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
       <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
       <button class="btn primary" :disabled="!currentPath || saving" @click="saveDoc">{{ saving ? '保存中…' : '保存' }}<kbd>Ctrl+S</kbd></button>
@@ -259,6 +260,35 @@
       <div class="dialog-actions">
         <button class="btn danger" :disabled="!trashItems.length || trashBusy" @click="emptyTrash">清空回收站</button>
         <button class="btn" @click="showTrash = false">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showHistory" @click.self="showHistory = false">
+    <div class="dialog history-dialog">
+      <h3>版本历史 <span class="trash-count">{{ historyVersions.length }} 个版本</span></h3>
+      <p>文档：<code>{{ historyPath }}</code> · 每次保存自动生成快照，最多保留 50 个版本。</p>
+      <div class="history-body">
+        <div class="history-list">
+          <button type="button" v-for="item in historyVersions" :key="item.id"
+            :class="{ active: selectedVersion === item.id }" @click="previewVersion(item.id)">
+            <strong>v{{ item.version }}<span v-if="item.version === latestVersionNumber"> · 最新</span></strong>
+            <small>{{ item.created_at }} · {{ item.size }} B · {{ versionLabel(item.action) }}</small>
+          </button>
+          <div class="trash-empty" v-if="!historyVersions.length">这篇文档还没有历史版本。</div>
+        </div>
+        <div class="history-preview">
+          <div class="history-preview-head">
+            <span>{{ selectedVersion ? '版本源码' : '选择左侧版本查看内容' }}</span>
+            <span v-if="versionSame !== null">{{ versionSame ? '与当前内容一致' : '与当前内容不同' }}</span>
+          </div>
+          <pre>{{ versionContent }}</pre>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn danger" :disabled="!historyVersions.length || historyBusy" @click="clearHistory">清空历史</button>
+        <button class="btn primary" :disabled="!selectedVersion || historyBusy" @click="restoreVersion">还原此版本</button>
+        <button class="btn" @click="showHistory = false">关闭</button>
       </div>
     </div>
   </div>

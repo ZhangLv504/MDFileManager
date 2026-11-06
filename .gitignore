@@ -18,3 +18,5 @@ __pycache__/
 data/**/*.md
 # 回收站内容（含 meta.json）属于本地运行数据，不入库
 data/.trash/
+# 文档版本历史（index.json 与快照）属于本地运行数据，不入库
+data/.history/

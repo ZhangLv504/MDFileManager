@@ -1,11 +1,13 @@
-"""测试用回收站清理工具：只移除验证脚本自己产生的条目，不碰用户真实回收站数据。
+"""测试运行数据清理：只移除验证脚本自己产生的回收站条目与版本历史。
 
-判定依据是 meta.json 里的 original_path 是否包含各脚本专用的测试标记，
+判定依据是原路径 / 文档路径是否包含各脚本专用的测试标记，
 例如 __smoke__ / __frontend__ / __browser__ / __stage5__。
+不会触碰用户的真实删除记录与文档历史。
 """
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -31,4 +33,36 @@ def cleanup_test_trash(base_dir: Path) -> int:
         if any(marker in original for marker in MARKERS):
             shutil.rmtree(item, ignore_errors=True)
             removed += 1
+    return removed
+
+
+def cleanup_test_history(base_dir: Path) -> int:
+    root = Path(base_dir) / "data" / ".history"
+    index_path = root / "index.json"
+    if not index_path.is_file():
+        return 0
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    docs = index.get("docs") if isinstance(index, dict) else None
+    if not isinstance(docs, dict):
+        return 0
+    removed = 0
+    for path in list(docs.keys()):
+        if not any(marker in path for marker in MARKERS):
+            continue
+        for entry in docs.pop(path, []):
+            version_id = str(entry.get("id", "")) if isinstance(entry, dict) else ""
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", version_id):
+                try:
+                    (root / "blobs" / (version_id + ".md")).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        removed += 1
+    if removed:
+        try:
+            index_path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
     return removed

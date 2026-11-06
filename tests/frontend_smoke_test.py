@@ -19,7 +19,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from trash_cleanup import cleanup_test_trash  # noqa: E402
+from trash_cleanup import cleanup_test_history, cleanup_test_trash  # noqa: E402
 
 WEB_DIR = BASE_DIR / "web"
 STATIC_ASSETS = (
@@ -205,6 +205,11 @@ console.log('math-ok');
               ">回收站<" in index_html and "openTrash" in index_html
               and "showTrash" in index_html and "restoreTrash(item.id)" in index_html
               and "purgeTrash(item.id)" in index_html and "emptyTrash" in index_html)
+        check("页面提供版本历史入口与预览/还原面板",
+              ">历史<" in index_html and "openHistory" in index_html
+              and "showHistory" in index_html and "history-dialog" in index_html
+              and "previewVersion(item.id)" in index_html
+              and "restoreVersion" in index_html and "clearHistory" in index_html)
 
         for asset in STATIC_ASSETS:
             code, raw, _ = fetch(base_url, asset)
@@ -238,6 +243,12 @@ console.log('math-ok');
         style_css = (WEB_DIR / "style.css").read_text(encoding="utf-8")
         check("样式提供回收站面板与角标", ".trash-dialog" in style_css
               and ".trash-list" in style_css and ".trash-badge" in style_css)
+        check("交互逻辑调用版本历史列表/快照/还原接口",
+              "'/api/history/'" in app_js and "'/api/versions/'" in app_js
+              and "'/api/history/restore'" in app_js
+              and "loadHistory" in app_js and "previewVersion" in app_js)
+        check("样式提供版本历史列表与预览区", ".history-dialog" in style_css
+              and ".history-list" in style_css and ".history-preview" in style_css)
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
@@ -273,6 +284,23 @@ console.log('math-ok');
         doc = as_json(raw)
         check("预览链路 GET 读回完整 Markdown 源码", code == 200
               and doc and doc.get("content") == content, f"-> {code}")
+
+        # 阶段十一：版本历史的前端链路
+        code, raw, _ = fetch(base_url, f"/api/history/{encoded}")
+        hist = as_json(raw) or {}
+        first_id = (hist.get("versions") or [{}])[0].get("id", "")
+        check("前端链路：文档历史列表可用", code == 200
+              and hist.get("count") == 1 and bool(first_id), f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, "/api/versions/" + first_id)
+        check("前端链路：读取历史版本源码", code == 200
+              and (as_json(raw) or {}).get("content") == content, f"-> {code}")
+        code, raw, _ = fetch(base_url, "/api/history/restore", "POST",
+                             {"path": TEST_DOC, "version_id": first_id})
+        check("前端链路：还原历史版本", code == 200
+              and (as_json(raw) or {}).get("restored") is True, f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, f"/api/history/{encoded}")
+        check("还原后历史版本数增加", (as_json(raw) or {}).get("count") == 2,
+              f"-> {code} {raw[:120]}")
 
         code, raw, _ = fetch(base_url, "/api/move", "PATCH",
                              {"path": TEST_DOC, "target_dir": TEST_DIR})
@@ -349,6 +377,7 @@ console.log('math-ok');
             pass
         shutil.rmtree(BASE_DIR / "data" / TEST_DIR, ignore_errors=True)
         cleanup_test_trash(BASE_DIR)
+        cleanup_test_history(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

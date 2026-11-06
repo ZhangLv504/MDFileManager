@@ -22,7 +22,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from trash_cleanup import cleanup_test_trash  # noqa: E402
+from trash_cleanup import cleanup_test_history, cleanup_test_trash  # noqa: E402
 
 PASSED = 0
 TOTAL = 0
@@ -102,10 +102,12 @@ def find_trash_item(items, original_path: str):
 def main() -> int:
     port = free_port()
     client = ApiClient(f"http://127.0.0.1:{port}")
-    # 用独立临时目录做回收站，隔离本脚本的所有删除/清空操作。
+    # 用独立临时目录做回收站与版本历史，隔离本脚本的所有删除/清空操作。
     trash_dir = Path(tempfile.mkdtemp(prefix="mdfm-smoke-trash-"))
+    history_dir = Path(tempfile.mkdtemp(prefix="mdfm-smoke-history-"))
     server_env = dict(os.environ)
     server_env["MDFM_TRASH_DIR"] = str(trash_dir)
+    server_env["MDFM_HISTORY_DIR"] = str(history_dir)
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1",
          "--port", str(port), "--log-level", "warning"],
@@ -127,6 +129,13 @@ def main() -> int:
     trash_doc = "Projects/__smoke__回收站文档.md"
     trash_dir = "Knowledge/__smoke__回收站目录"
     trash_nested_doc = trash_dir + "/子级/笔记.md"
+    hist_doc = "Projects/__smoke__历史文档.md"
+    hist_renamed = "Projects/__smoke__历史改名.md"
+    hist_moved = "Knowledge/__smoke__历史改名.md"
+    hist_dir = "Projects/__smoke__历史目录"
+    hist_dir_renamed = "Projects/__smoke__历史目录改名"
+    hist_nested = hist_dir + "/笔记.md"
+    hist_nested_renamed = hist_dir_renamed + "/笔记.md"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -372,6 +381,98 @@ def main() -> int:
         check("清空后回收站为空", code == 200
               and (listing or {}).get("count") == 0, f"-> {code} {listing}")
 
+        # 阶段十一：文档版本历史（保存快照、查看、还原、迁移、清空）
+        enc_hist = urllib.parse.quote(hist_doc, safe="/")
+        enc_hist_renamed = urllib.parse.quote(hist_renamed, safe="/")
+        enc_hist_moved = urllib.parse.quote(hist_moved, safe="/")
+        code, first = client.call("PUT", f"/api/docs/{enc_hist}", {"content": "# 第一版\n"})
+        check("新建文档生成首个历史版本", code == 200 and first
+              and first.get("version") and first.get("version_number") == 1,
+              f"-> {code} {first}")
+        first_id = first["version"]
+        code, hist = client.call("GET", f"/api/history/{enc_hist}")
+        check("历史列表返回 1 个 created 版本", code == 200 and hist
+              and hist.get("count") == 1
+              and hist["versions"][0].get("action") == "created", f"-> {code} {hist}")
+        code, ver = client.call("GET", "/api/versions/" + first_id)
+        check("按版本 ID 读取快照内容", code == 200 and ver
+              and ver.get("content") == "# 第一版\n", f"-> {code} {ver}")
+        code, same = client.call("PUT", f"/api/docs/{enc_hist}", {"content": "# 第一版\n"})
+        check("内容未变化时不再新增历史版本", code == 200 and same
+              and same.get("version") is None, f"-> {code} {same}")
+        code, hist2 = client.call("GET", f"/api/history/{enc_hist}")
+        check("重复保存后历史仍为 1 个版本", code == 200
+              and hist2.get("count") == 1, f"-> {code} {hist2}")
+        code, second = client.call("PUT", f"/api/docs/{enc_hist}", {"content": "# 第二版\n"})
+        check("同名覆盖生成第二个历史版本", code == 200 and second
+              and second.get("version_number") == 2, f"-> {code} {second}")
+        code, hist3 = client.call("GET", f"/api/history/{enc_hist}")
+        check("历史列表按版本倒序返回 2 个版本", code == 200
+              and hist3.get("count") == 2
+              and hist3["versions"][0].get("version") == 2, f"-> {code} {hist3}")
+        code, _ = client.call("GET", "/api/versions/bad.id")
+        check("读取非法版本 ID 返回 400", code == 400, f"-> {code}")
+        code, _ = client.call("GET", "/api/versions/__smoke__missing__")
+        check("读取不存在的版本返回 404", code == 404, f"-> {code}")
+
+        code, rolled = client.call("POST", "/api/history/restore",
+                                   {"path": hist_doc, "version_id": first_id})
+        check("还原到第一版并生成新版本", code == 200 and rolled
+              and rolled.get("restored") is True
+              and rolled.get("version_number") == 3
+              and rolled.get("from_version") == first_id, f"-> {code} {rolled}")
+        code, back = client.call("GET", f"/api/docs/{enc_hist}")
+        check("还原后文档内容回到第一版", code == 200 and back
+              and back.get("content") == "# 第一版\n", f"-> {code}")
+        code, hist4 = client.call("GET", f"/api/history/{enc_hist}")
+        check("还原动作本身记为 restore 版本", code == 200
+              and hist4.get("count") == 3
+              and hist4["versions"][0].get("action") == "restore"
+              and hist4["versions"][0].get("from_version") == first_id,
+              f"-> {code} {hist4}")
+        code, _ = client.call("POST", "/api/history/restore",
+                              {"path": hist_doc, "version_id": "__smoke__missing__"})
+        check("还原不属于该文档的版本返回 404", code == 404, f"-> {code}")
+
+        code, renamed = client.call("PATCH", "/api/rename",
+                                    {"path": hist_doc, "new_name": "__smoke__历史改名.md"})
+        check("重命名文档成功", code == 200 and renamed
+              and renamed.get("path") == hist_renamed, f"-> {code} {renamed}")
+        code, h_old = client.call("GET", f"/api/history/{enc_hist}")
+        code, h_new = client.call("GET", f"/api/history/{enc_hist_renamed}")
+        check("重命名后历史迁移到新路径", h_old.get("count") == 0
+              and h_new.get("count") == 3, f"-> old={h_old.get('count')} new={h_new.get('count')}")
+        code, moved = client.call("PATCH", "/api/move",
+                                  {"path": hist_renamed, "target_dir": "Knowledge"})
+        check("移动文档成功", code == 200 and moved
+              and moved.get("path") == hist_moved, f"-> {code} {moved}")
+        code, h_moved = client.call("GET", f"/api/history/{enc_hist_moved}")
+        check("移动后历史跟随到新路径", h_moved.get("count") == 3,
+              f"-> {h_moved.get('count')}")
+
+        code, nested = client.call("PUT",
+                                   f"/api/docs/{urllib.parse.quote(hist_nested, safe='/')}",
+                                   {"content": "# 目录内笔记\n"})
+        check("准备目录内文档用于历史迁移", code == 200, f"-> {code}")
+        code, dir_renamed = client.call("PATCH", "/api/rename",
+                                        {"path": hist_dir,
+                                         "new_name": "__smoke__历史目录改名"})
+        check("重命名目录成功", code == 200 and dir_renamed
+              and dir_renamed.get("path") == hist_dir_renamed, f"-> {code} {dir_renamed}")
+        code, h_nested = client.call(
+            "GET", f"/api/history/{urllib.parse.quote(hist_nested_renamed, safe='/')}")
+        check("目录改名后其下文档历史一并迁移", h_nested.get("count") == 1,
+              f"-> {h_nested.get('count')}")
+
+        code, cleared = client.call("DELETE", f"/api/history/{enc_hist_moved}")
+        check("清空文档历史返回清除条数", code == 200 and cleared
+              and cleared.get("cleared") == 3, f"-> {code} {cleared}")
+        code, h_empty = client.call("GET", f"/api/history/{enc_hist_moved}")
+        check("清空后历史列表为空", code == 200 and h_empty.get("count") == 0,
+              f"-> {code} {h_empty}")
+        code, ver_gone = client.call("GET", "/api/versions/" + first_id)
+        check("清空后旧版本快照已删除", code == 404, f"-> {code}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -418,7 +519,8 @@ def main() -> int:
             server.wait(timeout=8)
         except subprocess.TimeoutExpired:
             server.kill()
-        for relative in (doc_a, doc_b, doc_in_dir, trash_doc):
+        for relative in (doc_a, doc_b, doc_in_dir, trash_doc, hist_doc,
+                         hist_renamed, hist_moved):
             target = BASE_DIR / "data" / relative
             try:
                 if target.exists():
@@ -437,10 +539,14 @@ def main() -> int:
             "Projects/__smoke__可移动目录",
             "Projects/__smoke__待删目录",
             trash_dir,
+            hist_dir,
+            hist_dir_renamed,
         ):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         shutil.rmtree(trash_dir, ignore_errors=True)
+        shutil.rmtree(history_dir, ignore_errors=True)
         cleanup_test_trash(BASE_DIR)
+        cleanup_test_history(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

@@ -24,7 +24,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from trash_cleanup import cleanup_test_trash  # noqa: E402
+from trash_cleanup import cleanup_test_history, cleanup_test_trash  # noqa: E402
 
 TEST_DOC = "Projects/__browser__渲染验证.md"
 TEST_CONTENT = r"""# 浏览器渲染验证
@@ -203,6 +203,13 @@ def main() -> int:
               and "card-desc" in dom_cards)
         check("顶栏提供回收站入口", ">回收站" in dom and ">回收站" in dom_dir)
         check("页面提示删除内容可还原", "回收站" in dom_cards and "可还原" in dom_dir)
+        hist_buttons = re.findall(r"<button[^>]*>历史</button>", dom)
+        dir_hist_buttons = re.findall(r"<button[^>]*>历史</button>", dom_dir)
+        check("顶栏提供版本历史入口", bool(hist_buttons) and bool(dir_hist_buttons))
+        check("文档页历史按钮可用、目录页禁用",
+              bool(hist_buttons) and "disabled" not in hist_buttons[0]
+              and bool(dir_hist_buttons) and "disabled" in dir_hist_buttons[0],
+              f"-> doc={hist_buttons[:1]} dir={dir_hist_buttons[:1]}")
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")
@@ -221,6 +228,7 @@ def main() -> int:
             server.kill()
         shutil.rmtree(profile_dir, ignore_errors=True)
         cleanup_test_trash(BASE_DIR)
+        cleanup_test_history(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
         if output.strip():
             print("--- uvicorn 输出 ---")

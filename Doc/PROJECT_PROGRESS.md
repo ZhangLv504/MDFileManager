@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十均已完成并通过验证；十个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`。
+> 状态：阶段一～十一均已完成并通过验证；十一个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`。
 
 ## 核心需求与阶段划分
 
@@ -63,6 +63,16 @@
   - 回收站上限 500 条，满时删除返回 409；`tests/trash_cleanup.py` 只清理带测试标记的条目，不动用户真实记录。
 - **输出**：`main.py` 回收站能力、前端面板与文案、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段十一：文档版本历史
+- **目标**：补齐上一阶段结尾标注的「文档版本历史仍未实现」，让「同名覆盖即版本更新」真正留下可回溯的快照。
+- **机制**：
+  - `PUT /api/docs/{path}` 在内容发生变化时自动写一份快照到 `data/.history/blobs/<id>.md`，并在 `data/.history/index.json` 里按文档路径维护版本列表（版本号、时间、大小、动作）；内容完全相同的重复保存不新增版本。索引读写用 `threading.Lock` 串行化，`_atomic_write` 保证不写坏。
+  - 新增 `GET /api/history/{path}`（列表）、`GET /api/versions/{id}`（源码）、`POST /api/history/restore`（还原且还原动作自身生成新版本）、`DELETE /api/history/{path}`（清空）。版本 ID 白名单校验并限制在 `blobs/` 内。
+  - `PATCH /api/rename` 与 `PATCH /api/move` 成功后调用 `_history_repath` 迁移历史键；目录操作会连带迁移其下所有文档，目标已有历史时按时间合并并重新编号。
+  - 每篇文档最多 50 个版本、全局最多 500 篇 / 50 MB，超限自动裁剪最旧版本并删除对应快照；`MDFM_HISTORY_DIR` 可改存储位置（测试用来做隔离）。
+  - 前端顶栏「历史」按钮（仅打开文档时可用），面板左侧版本列表、右侧源码预览并标注与当前内容是否一致，可还原或清空；保存后若面板打开会自动刷新。
+- **输出**：`main.py` 版本历史能力、前端面板、四套验证脚本扩充。未引入新第三方库。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -104,6 +114,10 @@
 - 删除改为移入 `data/.trash/`，`GET /api/trash` / `POST /api/trash/restore` / `DELETE /api/trash[/{id}]` 四个接口；顶栏回收站面板支持还原、彻底删除与清空；跨盘移动自动回退。
 - 四套验证全绿：`tests/smoke_test.py` **87/87**、`tests/frontend_smoke_test.py` **58/58**、`tests/browser_smoke_test.py` **29/29**、`tests/stage5_smoke_test.py` **60/60**。
 
+### 阶段十一 · 版本历史（`stage-11-version-history`）
+- 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史；`data/.history/` 隐藏目录不入库。
+- 四套验证全绿：`tests/smoke_test.py` **110/110**、`tests/frontend_smoke_test.py` **65/65**、`tests/browser_smoke_test.py` **31/31**、`tests/stage5_smoke_test.py` **66/66**。
+
 ### 运行方式
 
 ```bash
@@ -126,7 +140,7 @@ py -3.12 -m venv .venv
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
 - 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的整目录删除」两种模式。
 - 删除先进回收站，可还原；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；还原只能回原位置，冲突返回 409。
-- 文档版本历史仍未实现——按业务定义，同名覆盖即视为版本更新。
+- 版本历史按文档路径归档，重命名 / 移动会迁移；整目录递归删除后其下文档的旧历史不自动迁移，仅保留旧路径记录。快照为纯文本，无 diff 对比；每篇最多 50 版，全局 500 篇 / 50 MB。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。

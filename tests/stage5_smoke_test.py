@@ -23,7 +23,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from trash_cleanup import cleanup_test_trash  # noqa: E402
+from trash_cleanup import cleanup_test_history, cleanup_test_trash  # noqa: E402
 
 WEB_DIR = BASE_DIR / "web"
 TEST_DIR = "Projects/__stage5__目录"
@@ -172,6 +172,13 @@ def main() -> int:
     check("交互逻辑接入回收站接口",
           "'/api/trash'" in app_js and "'/api/trash/restore'" in app_js
           and "refreshTrashCount" in app_js and "loadTrash" in app_js)
+    check("页面提供版本历史面板与还原入口",
+          ">历史<" in index_html and "showHistory" in index_html
+          and "history-dialog" in index_html and "restoreVersion" in index_html
+          and "clearHistory" in index_html and ".history-dialog" in style_css)
+    check("交互逻辑接入版本历史接口",
+          "'/api/history/'" in app_js and "'/api/versions/'" in app_js
+          and "loadHistory" in app_js and "previewVersion" in app_js)
     check("交互逻辑接入移动与拖拽整理",
           "'/api/move'" in app_js and "moveEntry" in app_js
           and "recursive=true" in app_js and "onDrop" in app_js
@@ -205,8 +212,17 @@ def main() -> int:
 
         code, _ = fetch(base_url, "/api/dirs/" + quote(TEST_DIR), "POST")
         check("创建测试目录", code == 200, f"-> {code}")
-        code, _ = fetch(base_url, "/api/docs/" + quote(TEST_DOC), "PUT", {"content": "# 笔记\n"})
+        code, raw = fetch(base_url, "/api/docs/" + quote(TEST_DOC), "PUT", {"content": "# 笔记\n"})
         check("创建测试文档", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/history/" + quote(TEST_DOC))
+        hist = as_json(raw) or {}
+        first_version = (hist.get("versions") or [{}])[0].get("id", "")
+        check("新建文档自动生成历史快照", code == 200
+              and hist.get("count") == 1 and bool(first_version),
+              f"-> {code} {raw[:150]}")
+        code, raw = fetch(base_url, "/api/versions/" + first_version)
+        check("按版本 ID 读取历史源码", code == 200
+              and (as_json(raw) or {}).get("content") == "# 笔记\n", f"-> {code}")
 
         code, raw = fetch(base_url, "/api/descriptions/" + quote(TEST_DIR),
                           "PUT", {"content": DESCRIPTION})
@@ -228,6 +244,12 @@ def main() -> int:
         check("新文档路径可读", code == 200, f"-> {code}")
         code, _ = fetch(base_url, "/api/docs/" + quote(TEST_DOC))
         check("旧文档路径已失效", code == 404, f"-> {code}")
+        code, raw = fetch(base_url, "/api/history/" + quote(RENAMED_DOC))
+        code_old, raw_old = fetch(base_url, "/api/history/" + quote(TEST_DOC))
+        check("重命名后历史迁移到新文档路径",
+              (as_json(raw) or {}).get("count") == 1
+              and (as_json(raw_old) or {}).get("count") == 0,
+              f"-> new={(as_json(raw) or {}).get('count')} old={(as_json(raw_old) or {}).get('count')}")
 
         code, raw = fetch(base_url, "/api/rename", "PATCH",
                           {"path": TEST_DIR, "new_name": "__stage5__已改名"})
@@ -237,6 +259,9 @@ def main() -> int:
               and renamed_dir.get("path") == RENAMED_DIR, f"-> {code} {raw[:160]}")
         code, _ = fetch(base_url, "/api/docs/" + quote(RENAMED_DIR + "/已改名笔记.md"))
         check("目录改名后其下文档仍可访问", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/history/" + quote(RENAMED_DIR + "/已改名笔记.md"))
+        check("目录改名后其下文档历史一并迁移",
+              (as_json(raw) or {}).get("count") == 1, f"-> {code} {raw[:120]}")
         code, raw = fetch(base_url, "/api/tree")
         check("目录树呈现改名后的目录",
               find_node((as_json(raw) or {}).get("tree", []), RENAMED_DIR) is not None
@@ -362,6 +387,7 @@ def main() -> int:
         for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET, "Projects/__stage5__空目录"):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         cleanup_test_trash(BASE_DIR)
+        cleanup_test_history(BASE_DIR)
         server.terminate()
         try:
             server.wait(timeout=8)
