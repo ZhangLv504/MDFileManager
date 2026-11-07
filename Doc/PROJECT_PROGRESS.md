@@ -126,7 +126,7 @@
 - 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史；`data/.history/` 隐藏目录不入库。
 - 四套验证全绿：`tests/smoke_test.py` **110/110**、`tests/frontend_smoke_test.py` **65/65**、`tests/browser_smoke_test.py` **31/31**、`tests/stage5_smoke_test.py` **66/66**。
 
-### 阶段十二 · 差异与定向还原（`stage-12-diff-restore`）
+### 阶段十二 · 差异与定向还原（`stage-12-diff-restore`，提交 `78797f3`）
 - `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；FastAPI 版本 1.6.0。
 - 四套验证全绿：`tests/smoke_test.py` **135/135**、`tests/frontend_smoke_test.py` **74/74**、`tests/browser_smoke_test.py` **33/33**、`tests/stage5_smoke_test.py` **74/74**。
 
