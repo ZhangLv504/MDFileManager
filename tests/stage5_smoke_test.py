@@ -179,6 +179,14 @@ def main() -> int:
     check("交互逻辑接入版本历史接口",
           "'/api/history/'" in app_js and "'/api/versions/'" in app_js
           and "loadHistory" in app_js and "previewVersion" in app_js)
+    check("页面提供差异对比与定向还原面板",
+          "switchHistoryTab('diff')" in index_html
+          and "diffLines" in index_html and "showRestoreLocation" in index_html
+          and "openRestoreLocation(item)" in index_html)
+    check("交互逻辑调用差异对比与定向还原接口",
+          "'/api/diff/'" in app_js and "loadDiff" in app_js
+          and "submitRestoreLocation" in app_js
+          and "target_dir: this.restoreTarget" in app_js)
     check("交互逻辑接入移动与拖拽整理",
           "'/api/move'" in app_js and "moveEntry" in app_js
           and "recursive=true" in app_js and "onDrop" in app_js
@@ -223,6 +231,19 @@ def main() -> int:
         code, raw = fetch(base_url, "/api/versions/" + first_version)
         check("按版本 ID 读取历史源码", code == 200
               and (as_json(raw) or {}).get("content") == "# 笔记\n", f"-> {code}")
+        code, raw = fetch(base_url, "/api/docs/" + quote(TEST_DOC), "PUT",
+                          {"content": "# 笔记\n\n第二版新增一行\n"})
+        second_version = (as_json(raw) or {}).get("version", "")
+        check("覆盖保存生成第二版", code == 200 and bool(second_version),
+              f"-> {code} {raw[:120]}")
+        diff_url = ("/api/diff/" + quote(TEST_DOC)
+                    + "?from=" + first_version + "&to=" + second_version)
+        code, raw = fetch(base_url, diff_url)
+        diff = as_json(raw) or {}
+        check("行级差异对比返回新增行", code == 200
+              and diff.get("stats", {}).get("added", 0) >= 1
+              and any(line.get("type") == "add" for line in diff.get("lines", [])),
+              f"-> {code} {raw[:150]}")
 
         code, raw = fetch(base_url, "/api/descriptions/" + quote(TEST_DIR),
                           "PUT", {"content": DESCRIPTION})
@@ -247,7 +268,7 @@ def main() -> int:
         code, raw = fetch(base_url, "/api/history/" + quote(RENAMED_DOC))
         code_old, raw_old = fetch(base_url, "/api/history/" + quote(TEST_DOC))
         check("重命名后历史迁移到新文档路径",
-              (as_json(raw) or {}).get("count") == 1
+              (as_json(raw) or {}).get("count") >= 1
               and (as_json(raw_old) or {}).get("count") == 0,
               f"-> new={(as_json(raw) or {}).get('count')} old={(as_json(raw_old) or {}).get('count')}")
 
@@ -261,7 +282,7 @@ def main() -> int:
         check("目录改名后其下文档仍可访问", code == 200, f"-> {code}")
         code, raw = fetch(base_url, "/api/history/" + quote(RENAMED_DIR + "/已改名笔记.md"))
         check("目录改名后其下文档历史一并迁移",
-              (as_json(raw) or {}).get("count") == 1, f"-> {code} {raw[:120]}")
+              (as_json(raw) or {}).get("count") >= 1, f"-> {code} {raw[:120]}")
         code, raw = fetch(base_url, "/api/tree")
         check("目录树呈现改名后的目录",
               find_node((as_json(raw) or {}).get("tree", []), RENAMED_DIR) is not None
@@ -314,6 +335,26 @@ def main() -> int:
         code, raw = fetch(base_url, "/api/trash/" + second.get("trash_id", "__none__"), "DELETE")
         check("彻底删除单个回收站条目", code == 200
               and (as_json(raw) or {}).get("purged") is True, f"-> {code} {raw[:120]}")
+
+        reloc_doc = "Projects/__stage5__定向还原.md"
+        reloc_new = "Knowledge/__stage5__定向还原.md"
+        code, _ = fetch(base_url, "/api/docs/" + quote(reloc_doc), "PUT",
+                           {"content": "# 定向还原\n"})
+        check("准备定向还原的文档", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/docs/" + quote(reloc_doc), "DELETE")
+        reloc_item = as_json(raw) or {}
+        code, raw = fetch(base_url, "/api/trash/restore", "POST",
+                          {"id": reloc_item.get("trash_id", ""),
+                           "target_dir": "Knowledge"})
+        relocated = as_json(raw) or {}
+        check("回收站条目可还原到指定目录", code == 200
+              and relocated.get("relocated") is True
+              and relocated.get("path") == reloc_new, f"-> {code} {raw[:150]}")
+        code, _ = fetch(base_url, "/api/docs/" + quote(reloc_new))
+        check("定向还原后新位置可读", code == 200, f"-> {code}")
+        code, raw = fetch(base_url, "/api/history/" + quote(reloc_new))
+        check("定向还原后历史迁移到新路径",
+              (as_json(raw) or {}).get("count") == 1, f"-> {code} {raw[:120]}")
         code, _ = fetch(base_url, "/api/dirs/" + quote(RENAMED_DIR), "DELETE")
         check("非空目录拒绝删除返回 409", code == 409, f"-> {code}")
 
@@ -386,6 +427,12 @@ def main() -> int:
     finally:
         for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET, "Projects/__stage5__空目录"):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+        for leftover in ("Projects/__stage5__定向还原.md",
+                         "Knowledge/__stage5__定向还原.md"):
+            try:
+                (BASE_DIR / "data" / leftover).unlink(missing_ok=True)
+            except OSError:
+                pass
         cleanup_test_trash(BASE_DIR)
         cleanup_test_history(BASE_DIR)
         server.terminate()

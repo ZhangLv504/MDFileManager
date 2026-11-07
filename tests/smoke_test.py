@@ -136,6 +136,11 @@ def main() -> int:
     hist_dir_renamed = "Projects/__smoke__历史目录改名"
     hist_nested = hist_dir + "/笔记.md"
     hist_nested_renamed = hist_dir_renamed + "/笔记.md"
+    diff_doc = "Projects/__smoke__差异文档.md"
+    reloc_doc = "Projects/__smoke__还原位置.md"
+    reloc_new = "Knowledge/__smoke__还原位置.md"
+    migrate_dir = "Projects/__smoke__迁移源"
+    migrate_new = "Knowledge/__smoke__迁移源"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -473,6 +478,108 @@ def main() -> int:
         code, ver_gone = client.call("GET", "/api/versions/" + first_id)
         check("清空后旧版本快照已删除", code == 404, f"-> {code}")
 
+        # 阶段十二：版本差异对比与回收站还原到新位置
+        enc_diff = urllib.parse.quote(diff_doc, safe="/")
+        v1_text = "# 差异\n\n第一行\n保留\n"
+        v2_text = "# 差异\n\n第一行改了\n保留\n新增行\n"
+        code, _ = client.call("PUT", f"/api/docs/{enc_diff}", {"content": v1_text})
+        check("准备差异对比的第一版", code == 200, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/docs/{enc_diff}", {"content": v2_text})
+        check("准备差异对比的第二版", code == 200, f"-> {code}")
+        code, versions = client.call("GET", f"/api/history/{enc_diff}")
+        v2_id = versions["versions"][0]["id"]
+        v1_id = versions["versions"][1]["id"]
+        check("差异对比前确认两个版本", code == 200
+              and versions.get("count") == 2, f"-> {code} {versions}")
+
+        code, diff = client.call(
+            "GET", f"/api/diff/{enc_diff}?from={v1_id}&to={v2_id}")
+        check("GET /api/diff 返回结构化行级差异", code == 200 and diff
+              and diff.get("stats", {}).get("added") == 2
+              and diff.get("stats", {}).get("removed") == 1
+              and diff.get("stats", {}).get("unchanged") == 3,
+              f"-> {code} {diff.get('stats') if diff else None}")
+        check("差异结果区分 equal / del / add 行", diff
+              and [line["type"] for line in diff["lines"]]
+              == ["equal", "equal", "del", "add", "equal", "add"],
+              f"-> {[l.get('type') for l in diff.get('lines', [])] if diff else None}")
+        check("差异结果包含 unified diff 文本", diff
+              and "-第一行" in diff.get("unified", "")
+              and "+新增行" in diff.get("unified", ""), f"-> {code}")
+        check("差异结果带版本标签", diff
+              and diff.get("from_label") == "v1" and diff.get("to_label") == "v2",
+              f"-> {diff.get('from_label') if diff else None}")
+        code, same_diff = client.call(
+            "GET", f"/api/diff/{enc_diff}?from={v1_id}&to={v1_id}")
+        check("同一版本对比无增删行", code == 200 and same_diff
+              and same_diff["stats"]["added"] == 0
+              and same_diff["stats"]["removed"] == 0, f"-> {code}")
+        code, cur_diff = client.call(
+            "GET", f"/api/diff/{enc_diff}?from=current&to={v1_id}")
+        check("支持与当前内容对比", code == 200 and cur_diff
+              and cur_diff.get("from_label") == "当前内容"
+              and cur_diff["stats"]["added"] == 1, f"-> {code} {cur_diff}")
+        code, _ = client.call("GET", f"/api/diff/{enc_diff}?from=bad.id&to={v1_id}")
+        check("差异接口拒绝非法版本 ID", code == 400, f"-> {code}")
+        code, _ = client.call(
+            "GET", f"/api/diff/{enc_diff}?from=__smoke__missing__&to={v1_id}")
+        check("差异接口拒绝不属于该文档的版本", code == 404, f"-> {code}")
+        code, _ = client.call("GET", f"/api/diff/{enc_diff}")
+        check("差异接口缺少 from/to 参数返回 422", code == 422, f"-> {code}")
+
+        enc_reloc = urllib.parse.quote(reloc_doc, safe="/")
+        code, _ = client.call("PUT", f"/api/docs/{enc_reloc}", {"content": "# 待还原\n"})
+        check("准备还原到新位置的文档", code == 200, f"-> {code}")
+        code, trashed_reloc = client.call("DELETE", f"/api/docs/{enc_reloc}")
+        check("文档进入回收站", code == 200 and trashed_reloc.get("trashed") is True,
+              f"-> {code} {trashed_reloc}")
+        code, relocated = client.call("POST", "/api/trash/restore",
+                                      {"id": trashed_reloc["trash_id"],
+                                       "target_dir": "Knowledge"})
+        check("还原到指定目录并返回新路径", code == 200 and relocated
+              and relocated.get("relocated") is True
+              and relocated.get("path") == reloc_new, f"-> {code} {relocated}")
+        code, _ = client.call("GET", f"/api/docs/{urllib.parse.quote(reloc_new, safe='/')}")
+        check("新位置的文档可读", code == 200, f"-> {code}")
+        code, _ = client.call("GET", f"/api/docs/{enc_reloc}")
+        check("原位置仍为空", code == 404, f"-> {code}")
+        code, h_new = client.call("GET", f"/api/history/{urllib.parse.quote(reloc_new, safe='/')}")
+        code2, h_old = client.call("GET", f"/api/history/{enc_reloc}")
+        check("还原到新位置时历史一并迁移", code == 200 and code2 == 200
+              and h_new.get("count") == 1 and h_old.get("count") == 0,
+              f"-> new={h_new.get('count')} old={h_old.get('count')}")
+        code, _ = client.call("PUT", f"/api/docs/{enc_reloc}", {"content": "# 同名\n"})
+        code, conflict_item = client.call("DELETE", f"/api/docs/{enc_reloc}")
+        code, _ = client.call("POST", "/api/trash/restore",
+                              {"id": conflict_item["trash_id"], "target_dir": "Knowledge"})
+        check("新位置存在同名条目时还原返回 409", code == 409, f"-> {code}")
+        code, _ = client.call("POST", "/api/trash/restore",
+                              {"id": conflict_item["trash_id"], "target_dir": ""})
+        check("拒绝把文档还原到 data/ 顶层", code == 400, f"-> {code}")
+        code, _ = client.call("POST", "/api/trash/restore",
+                              {"id": conflict_item["trash_id"],
+                               "target_dir": "../escape"})
+        check("还原接口拒绝路径遍历的目标目录", code in (400, 403, 404), f"-> {code}")
+
+        enc_migrate = urllib.parse.quote(migrate_dir, safe="/")
+        code, _ = client.call("PUT", f"/api/docs/{urllib.parse.quote(migrate_dir + '/笔记.md', safe='/')}",
+                              {"content": "# 目录内笔记\n"})
+        check("准备含文档的待还原目录", code == 200, f"-> {code}")
+        code, dir_item = client.call(
+            "DELETE", f"/api/dirs/{enc_migrate}?recursive=true&confirm="
+            + urllib.parse.quote("__smoke__迁移源"))
+        check("整目录移入回收站", code == 200 and dir_item.get("trashed") is True,
+              f"-> {code} {dir_item}")
+        code, dir_relocated = client.call("POST", "/api/trash/restore",
+                                          {"id": dir_item["trash_id"],
+                                           "target_dir": "Knowledge"})
+        check("整目录还原到新位置", code == 200 and dir_relocated
+              and dir_relocated.get("path") == migrate_new, f"-> {code} {dir_relocated}")
+        code, nested_hist = client.call(
+            "GET", f"/api/history/{urllib.parse.quote(migrate_new + '/笔记.md', safe='/')}")
+        check("整目录还原后其下文档历史一并迁移",
+              nested_hist.get("count") == 1, f"-> {code} {nested_hist}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -520,7 +627,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             server.kill()
         for relative in (doc_a, doc_b, doc_in_dir, trash_doc, hist_doc,
-                         hist_renamed, hist_moved):
+                         hist_renamed, hist_moved, diff_doc, reloc_doc, reloc_new):
             target = BASE_DIR / "data" / relative
             try:
                 if target.exists():
@@ -541,6 +648,8 @@ def main() -> int:
             trash_dir,
             hist_dir,
             hist_dir_renamed,
+            migrate_dir,
+            migrate_new,
         ):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         shutil.rmtree(trash_dir, ignore_errors=True)

@@ -242,7 +242,7 @@
   <div class="dialog-mask" v-if="showTrash" @click.self="showTrash = false">
     <div class="dialog trash-dialog">
       <h3>回收站 <span class="trash-count">{{ trashCount }} 项</span></h3>
-      <p>删除的文档与目录先移入回收站，可还原到原位置；「彻底删除」与「清空回收站」不可恢复。</p>
+      <p>删除的文档与目录先移入回收站：可还原到原位置，也可点「还原到…」选择新目录；「彻底删除」与「清空回收站」不可恢复。</p>
       <div class="trash-list">
         <div class="trash-item" v-for="item in trashItems" :key="item.id">
           <div class="trash-info">
@@ -252,6 +252,7 @@
           </div>
           <div class="trash-actions">
             <button type="button" class="btn" @click="restoreTrash(item.id)">还原</button>
+            <button type="button" class="btn" @click="openRestoreLocation(item)">还原到…</button>
             <button type="button" class="btn danger" @click="purgeTrash(item.id)">彻底删除</button>
           </div>
         </div>
@@ -279,16 +280,59 @@
         </div>
         <div class="history-preview">
           <div class="history-preview-head">
-            <span>{{ selectedVersion ? '版本源码' : '选择左侧版本查看内容' }}</span>
-            <span v-if="versionSame !== null">{{ versionSame ? '与当前内容一致' : '与当前内容不同' }}</span>
+            <div class="history-tabs">
+              <button type="button" :class="{ active: historyTab === 'source' }" @click="switchHistoryTab('source')">源码</button>
+              <button type="button" :class="{ active: historyTab === 'diff' }" @click="switchHistoryTab('diff')">差异</button>
+            </div>
+            <span v-if="historyTab === 'source' && versionSame !== null">{{ versionSame ? '与当前内容一致' : '与当前内容不同' }}</span>
+            <span v-else-if="historyTab === 'diff' && diffStats">+{{ diffStats.added }} −{{ diffStats.removed }} · {{ diffStats.unchanged }} 行未变</span>
           </div>
-          <pre>{{ versionContent }}</pre>
+          <div class="diff-select" v-if="historyTab === 'diff'">
+            <label>基准
+              <select v-model="diffBase">
+                <option value="current">当前内容</option>
+                <option v-for="item in historyVersions" :key="item.id" :value="item.id">v{{ item.version }}</option>
+              </select>
+            </label>
+            <span>→ 目标 v{{ selectedVersionNumber || '—' }}</span>
+          </div>
+          <div class="diff-view" v-if="historyTab === 'diff'">
+            <div class="diff-line" v-for="(line, index) in diffLines" :key="index" :class="line.type">
+              <span class="diff-no">{{ line.old_no || '' }}</span>
+              <span class="diff-no">{{ line.new_no || '' }}</span>
+              <span class="diff-sign">{{ line.type === 'add' ? '+' : (line.type === 'del' ? '−' : ' ') }}</span>
+              <span class="diff-text">{{ line.text }}</span>
+            </div>
+            <div class="trash-empty" v-if="!diffLines.length">选择左侧版本后即可查看与该基准的行级差异。</div>
+          </div>
+          <pre v-else>{{ versionContent }}</pre>
         </div>
       </div>
       <div class="dialog-actions">
         <button class="btn danger" :disabled="!historyVersions.length || historyBusy" @click="clearHistory">清空历史</button>
         <button class="btn primary" :disabled="!selectedVersion || historyBusy" @click="restoreVersion">还原此版本</button>
         <button class="btn" @click="showHistory = false">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showRestoreLocation" @click.self="showRestoreLocation = false">
+    <div class="dialog">
+      <h3>还原到指定目录</h3>
+      <p>条目：<code>{{ restoreSource.name }}</code> · 原位置 <code>{{ restoreSource.original_path }}</code></p>
+      <p>选择还原的目标目录：</p>
+      <div class="dir-list">
+        <button type="button" v-for="option in restoreOptions" :key="option.path"
+          :class="{ active: restoreTarget === option.path }" @click="restoreTarget = option.path">
+          <span class="dir-list-name">{{ option.name }}</span>
+          <span class="dir-list-path">{{ option.path || 'data/ 顶层' }}</span>
+        </button>
+        <div class="dir-list-empty" v-if="!restoreOptions.length">没有可用的目标目录。</div>
+      </div>
+      <div class="dialog-hint">同名条目已存在会返回冲突提示；还原到新位置时，该条目的版本历史会一并迁移。</div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showRestoreLocation = false">取消</button>
+        <button class="btn primary" :disabled="!restoreOptions.length || trashBusy" @click="submitRestoreLocation">还原</button>
       </div>
     </div>
   </div>

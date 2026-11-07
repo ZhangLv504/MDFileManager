@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`（`3038db1`）。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`（`3038db1`）+ 阶段十二差异对比与定向还原 `stage-12-diff-restore`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -162,7 +162,7 @@ cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
 | `katex/fonts/*.woff2` | KaTeX **0.16.22**，20 个文件 | 数学符号与字形字体，离线渲染公式必需。 |
 | `../math.js`（项目自写，非第三方） | — | 为 marked 注册公式扩展：先把公式换成占位 `span`，等 DOMPurify 净化、Vue 挂载后再由 KaTeX 原地填充，避免 marked 的反斜杠转义破坏公式。 |
 
-引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～十一均未引入新第三方库：拖拽整理使用浏览器原生 HTML5 Drag & Drop API，回收站与版本历史使用 Python 标准库 `json` / `shutil` / `uuid` / `threading`，无额外依赖。
+引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～十二均未引入新第三方库：拖拽整理使用浏览器原生 HTML5 Drag & Drop API，回收站与版本历史使用 Python 标准库 `json` / `shutil` / `uuid` / `threading` / `difflib`，无额外依赖。
 
 ---
 
@@ -210,23 +210,24 @@ py -3.12 -m venv .venv
 | `PUT /api/descriptions/{目录路径}` | 写入目录作用说明，请求体 `{content}`，保存到该目录的 `.description.md` |
 | `GET / PUT / DELETE /api/docs/{分类}/{文件名}.md` | 读取 / 保存（覆盖）/ 删除 Markdown 文档（删除进回收站） |
 | `GET /api/trash` | 回收站列表，每条含 `id`、原路径、名称、类型、删除时间、文档数与大小 |
-| `POST /api/trash/restore` | 还原到原位置，请求体 `{id}`；原位置被占用时返回 409 |
+| `POST /api/trash/restore` | 还原到原位置 `{id}`，或加 `target_dir` 还原到指定目录；目标被占用返回 409，新位置会迁移历史 |
 | `DELETE /api/trash/{id}` | 彻底删除单条回收站记录（不可恢复） |
 | `DELETE /api/trash` | 清空回收站（不可恢复），返回清除条数 |
 | `GET /api/history/{文档路径}` | 该文档的历史版本列表（版本号、时间、大小、动作），倒序 |
 | `GET /api/versions/{version_id}` | 读取某个历史版本的 Markdown 源码 |
 | `POST /api/history/restore` | 把文档还原到指定版本，请求体 `{path, version_id}`，还原动作自身也记为新版本 |
 | `DELETE /api/history/{文档路径}` | 清空该文档的全部历史版本（不可恢复） |
+| `GET /api/diff/{文档路径}?from=…&to=…` | 行级差异对比；`from` / `to` 填版本 ID 或 `current`，返回逐行增删、统计与 unified diff |
 
 前端页面与 API 由**同一个 uvicorn 进程**提供，因此不存在跨域问题；页面里的 `fetch` 全部走相对路径 `/api/...`。
 
 ### 4.3 验证是否正常运行
 
 ```bash
-.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/回收站/版本历史 API：110/110
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：65/65
-.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：31/31
-.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/历史/卡片：66/66
+.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/回收站/历史/差异 API：135/135
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：74/74
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：33/33
+.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/历史/卡片：74/74
 ```
 
 四个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。`tests/trash_cleanup.py` 只清理带测试标记的回收站条目与版本历史，不会碰用户真实数据；`smoke_test.py` 还通过 `MDFM_TRASH_DIR` / `MDFM_HISTORY_DIR` 把回收站与历史指向临时目录，专门验证跨盘移动与「清空」类操作。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别验证文档页与目录页/卡片库的真实 DOM，不下载浏览器。
@@ -261,7 +262,8 @@ MDFileManager/
 - **右键菜单**：目录可用「打开目录 / 重命名 / 移动到… / 在此新建文件夹 / 在此新建文档 / 编辑说明 / 删除目录 / 清空并移入回收站…」；文档可用「打开文档 / 重命名 / 移动到… / 删除文档」。删除前有确认弹窗，删除后内容进回收站。
 - **移动与拖拽整理**：把目录页里的文件夹或文档**拖到另一个文件夹、面包屑上的任一级、目录页上方「移动到上级」区域，或卡片库的另一张卡片**上即可完成移动；也可右键「移动到…」在目录列表里选择目标（自动排除自身及其子目录）。移动成功后当前文档、所在目录、选中目录与地址栏深链接会自动同步。
 - **删除规则**：文档可直接删除；「删除目录」**仅空目录可删**（非空返回 409 并提示先清空或用递归删除）；「清空并移入回收站…」用于整目录删除，需**手动输入完整目录名**作为二次确认，后端也会再次校验该名称。删除时连同子目录、文档、`.description.md` 一起移入回收站，且**不跟随符号链接**（发现符号链接直接拒绝），单次上限 2000 项。删除当前文档或当前所在目录后，视图自动回退到上级。
-- **回收站**：顶栏「回收站」按钮带条目数角标，面板列出原路径、名称、类型与删除时间，可「还原」到原位置（原位置被占用返回 409）、「彻底删除」单条或「清空回收站」。数据落在 `data/.trash/<id>/`（`payload/` 保存原内容，`meta.json` 保存原路径等元数据），是隐藏目录，不进目录树也不入库；可用环境变量 `MDFM_TRASH_DIR` 改到其他位置，跨磁盘时自动退化为「复制 + 删除源」。回收站上限 500 条，满时删除会返回 409 提示先清空。
+- **回收站**：顶栏「回收站」按钮带条目数角标，面板列出原路径、名称、类型与删除时间，可「还原」到原位置、「还原到…」选择新目录、「彻底删除」单条或「清空回收站」。数据落在 `data/.trash/<id>/`（`payload/` 保存原内容，`meta.json` 保存原路径等元数据），是隐藏目录，不进目录树也不入库；可用环境变量 `MDFM_TRASH_DIR` 改到其他位置，跨磁盘时自动退化为「复制 + 删除源」。回收站上限 500 条，满时删除会返回 409 提示先清空。
+- **差异对比**：历史面板右侧可在「源码 / 差异」间切换；差异视图用基准下拉选择「当前内容」或任意版本，与左侧选中的目标版本做行级比对，绿色为新增、红色为删除，并显示 `+N −M · K 行未变`。编辑文档时若基准是「当前内容」，差异会实时重算。
 - **版本历史**：打开文档后顶栏「历史」可用，面板左侧是版本列表（最新在前）、右侧是源码预览并标注「与当前内容一致 / 不同」，可「还原此版本」（当前内容会先成为一个新版本）或「清空历史」。每次 `PUT` 保存内容发生变化时自动生成快照；内容完全相同的重复保存不产生新版本。重命名 / 移动文档会连同历史一起迁移，重命名 / 移动目录会迁移其下所有文档的历史。数据落在 `data/.history/`（`index.json` 索引 + `blobs/<id>.md` 快照），可用环境变量 `MDFM_HISTORY_DIR` 改位置；每篇文档最多 50 个版本、全局最多 500 篇文档 / 50 MB，超出自动裁剪最旧版本。
 - **选中目录**：单击卡片或目录页里的文件夹可选中（高亮），「已选目录」显示在页面头部；未选中目录时顶栏「新建」只能建顶层目录，选中后可建子目录或 `.md` 文档。
 - **重命名**：文档名需 `.md` 结尾（省略自动补全），目录名不能以 `.md` 结尾；同名冲突返回 409，非法名称返回 400。重命名后当前目录、当前文档、选中目录与深链接会自动同步。
@@ -277,9 +279,9 @@ MDFileManager/
 
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
-| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 110/110 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 65/65 |
-| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 31/31 |
+| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 135/135 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 74/74 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 33/33 |
 | 阶段四 · 目录管理 | 无新增第三方库 | `POST /api/dirs` + 目录选中 + 分类新建 |
 | 阶段五 · 卡片与重命名 | 无新增第三方库 | 顶层卡片视图 + 右键重命名 + 目录说明 |
 | 阶段六 · 纯卡片导航 | 无新增第三方库 | 移除侧栏树 |
@@ -287,7 +289,8 @@ MDFileManager/
 | 阶段八 · 内容操作 | 无新增第三方库 | 空目录删除 + 右键菜单/目录页新建与删除 |
 | 阶段九 · 内容整理 | 无新增第三方库（原生 HTML5 Drag & Drop） | `PATCH /api/move` 移动 + 拖拽整理 + 带名称确认的递归删除 |
 | 阶段十 · 回收站 | 无新增第三方库（标准库 json / shutil / uuid） | 删除改为移入回收站、列表/还原/彻底删除/清空、`MDFM_TRASH_DIR` 跨盘回退 |
-| 阶段十一 · 版本历史 | 无新增第三方库（标准库 json / threading / uuid） | 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史；`tests/stage5_smoke_test.py` 66/66 |
+| 阶段十一 · 版本历史 | 无新增第三方库（标准库 json / threading / uuid） | 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史 |
+| 阶段十二 · 差异与定向还原 | 无新增第三方库（标准库 difflib） | `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；`tests/stage5_smoke_test.py` 74/74 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
@@ -295,8 +298,9 @@ MDFileManager/
 - 公式支持行内 `$...$` 与块级 `$$...$$`；代码块中的 `$` 不解析；KaTeX 以 `throwOnError: false` 渲染，非法公式保留原文不中断页面。
 - 重命名只改名称、移动只改位置，两者都不改文件内容；移动会拒绝循环（目录移入自身或后代）、同名冲突 409、文档移到 `data/` 顶层、路径遍历与符号链接。
 - 删除先进回收站：普通删除可还原；递归删除仍需输入完整目录名二次确认，且不跟随符号链接、单次上限 2000 项。**只有「彻底删除」与「清空回收站」不可恢复**，回收站上限 500 条。
-- 回收站只记录原位置，不支持「还原到新位置」；若原位置已被同名条目占用，会返回 409，需先移开或重命名再还原。
-- 版本历史按文档路径归档：文档被移入回收站后历史仍保留，从回收站还原后可继续使用；但文档被「递归删除整个目录」后其下文档的历史不会自动迁移到新路径，仅保留旧路径记录。历史快照是纯文本，不含差异对比（diff），预览只标注与当前内容是否一致。
+- 回收站可还原到原位置，也可点「还原到…」选择新目录（文档不能放到 `data/` 顶层）；目标位置已有同名条目返回 409。还原到新位置时，文档或整目录的版本历史会一并迁移。
+- 版本历史按文档路径归档：文档被移入回收站后历史仍保留，从回收站还原后可继续使用；但文档被「递归删除整个目录」后，如果没有走回收站还原流程，其下文档的历史不会自动迁移到新路径，仅保留旧路径记录。
+- 差异对比使用标准库 `difflib` 生成，单侧最多 3000 行，超出返回 409；是逐行增删的纯文本对比，不做语法级或字符级高亮。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览通过双击进入目录页；深链接仍可直达文档或目录。
 - 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时对应脚本会跳过或失败，但其余脚本与项目本身不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。

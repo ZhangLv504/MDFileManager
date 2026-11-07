@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十一均已完成并通过验证；十一个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`。
+> 状态：阶段一～十二均已完成并通过验证；十二个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`。
 
 ## 核心需求与阶段划分
 
@@ -73,6 +73,14 @@
   - 前端顶栏「历史」按钮（仅打开文档时可用），面板左侧版本列表、右侧源码预览并标注与当前内容是否一致，可还原或清空；保存后若面板打开会自动刷新。
 - **输出**：`main.py` 版本历史能力、前端面板、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段十二：差异对比与回收站定向还原
+- **目标**：补齐上一阶段结尾标注的两个缺口——「快照没有 diff 对比」与「回收站不支持还原到新位置」。
+- **机制**：
+  - 新增 `GET /api/diff/{path}?from=…&to=…`：`from` / `to` 可为版本 ID 或 `current`（当前文档内容）。用标准库 `difflib.SequenceMatcher` 生成结构化行级差异（`equal` / `add` / `del`、新旧行号）、增删统计与 unified diff 文本；版本归属校验、ID 白名单、单侧 3000 行上限。
+  - `POST /api/trash/restore` 增加可选 `target_dir`：还原到指定目录（空串为顶层，仅目录可用），目标同名 409、路径遍历拒绝；还原到新路径时调用 `_history_repath` 把文档或整目录的版本历史一并迁移。
+  - 前端历史面板增加「源码 / 差异」切换、基准版本下拉（当前内容或任意版本）、行级增删高亮与统计；编辑时若基准是「当前内容」会实时重算差异。回收站每项新增「还原到…」目录选择对话框，复用 `allDirs` 列表。
+- **输出**：`main.py` 差异与定向还原能力、前端面板、四套验证脚本扩充。未引入新第三方库。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -118,6 +126,10 @@
 - 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史；`data/.history/` 隐藏目录不入库。
 - 四套验证全绿：`tests/smoke_test.py` **110/110**、`tests/frontend_smoke_test.py` **65/65**、`tests/browser_smoke_test.py` **31/31**、`tests/stage5_smoke_test.py` **66/66**。
 
+### 阶段十二 · 差异与定向还原（`stage-12-diff-restore`）
+- `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；FastAPI 版本 1.6.0。
+- 四套验证全绿：`tests/smoke_test.py` **135/135**、`tests/frontend_smoke_test.py` **74/74**、`tests/browser_smoke_test.py` **33/33**、`tests/stage5_smoke_test.py` **74/74**。
+
 ### 运行方式
 
 ```bash
@@ -140,7 +152,7 @@ py -3.12 -m venv .venv
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
 - 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的整目录删除」两种模式。
 - 删除先进回收站，可还原；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；还原只能回原位置，冲突返回 409。
-- 版本历史按文档路径归档，重命名 / 移动会迁移；整目录递归删除后其下文档的旧历史不自动迁移，仅保留旧路径记录。快照为纯文本，无 diff 对比；每篇最多 50 版，全局 500 篇 / 50 MB。
+- 版本历史按文档路径归档，重命名 / 移动 / 从回收站定向还原都会迁移；整目录递归删除后若不走回收站还原，其下文档的旧历史仅保留旧路径记录。差异为 `difflib` 逐行对比，单侧上限 3000 行；每篇最多 50 版，全局 500 篇 / 50 MB。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。

@@ -295,6 +295,36 @@ body {
   font-family: "Cascadia Code", "Consolas", "Microsoft YaHei", monospace;
   color: var(--text); background: #fafbfc;
 }
+.history-tabs { display: flex; gap: 4px; }
+.history-tabs button {
+  height: 22px; padding: 0 8px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.history-tabs button.active { background: var(--accent-soft); color: var(--accent); }
+.diff-select {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+  font-size: 11px; color: var(--muted); background: #fff;
+}
+.diff-select select {
+  height: 24px; padding: 0 6px; border: 1px solid var(--line);
+  border-radius: 5px; font-size: 11px; background: #fff; color: var(--text);
+}
+.diff-view {
+  flex: 1; overflow: auto; max-height: 300px;
+  font-family: "Cascadia Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 12px; line-height: 1.6; background: #fafbfc;
+}
+.diff-line { display: flex; align-items: flex-start; min-height: 19px; white-space: pre-wrap; word-break: break-word; }
+.diff-line .diff-no {
+  flex: none; width: 34px; padding: 0 6px; text-align: right;
+  color: #9aa2ac; border-right: 1px solid var(--line); user-select: none;
+}
+.diff-line .diff-sign { flex: none; width: 18px; text-align: center; user-select: none; }
+.diff-line .diff-text { flex: 1; min-width: 0; padding-right: 10px; }
+.diff-line.add { background: #e6f6ec; color: #0f6e56; }
+.diff-line.del { background: #fdecec; color: #a32d2d; }
+.diff-line.add .diff-sign, .diff-line.del .diff-sign { font-weight: 600; }
 
 .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
 .markdown-body .math-placeholder { color: var(--muted); }

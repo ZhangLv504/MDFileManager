@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import errno
 import json
 import os
@@ -25,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,7 @@ HISTORY_BLOBS = "blobs"
 MAX_VERSIONS_PER_DOC = 50
 MAX_HISTORY_DOCS = 500
 MAX_HISTORY_BYTES = 50 * 1024 * 1024
+MAX_DIFF_LINES = 3000
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
 _FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"|?*\\]')
@@ -80,7 +82,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.5.0",
+    version="1.6.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -437,6 +439,84 @@ def _history_entries(rel: str) -> list[dict[str, Any]]:
         return list(_history_read()["docs"].get(rel, []))
 
 
+def _diff_side(rel: str, selector: str, current_doc: Path) -> tuple[str, str]:
+    """解析差异的一侧：'current' 读当前文档，其余按版本 ID 读快照。"""
+    if selector == "current":
+        if not current_doc.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="文档当前内容不存在，无法与当前内容对比",
+            )
+        try:
+            return current_doc.read_text(encoding="utf-8"), "当前内容"
+        except (OSError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"读取当前文档失败：{exc}",
+            ) from exc
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", selector):
+        raise _bad_request("版本 ID 非法")
+    entries = _history_entries(rel)
+    match = next((entry for entry in entries if entry.get("id") == selector), None)
+    if not match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该版本不属于此文档或已被清理",
+        )
+    blob = _history_blob_path(selector)
+    if not blob.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="版本快照缺失")
+    try:
+        return blob.read_text(encoding="utf-8"), f"v{match.get('version')}"
+    except (OSError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取版本失败：{exc}",
+        ) from exc
+
+
+def _build_diff(old_text: str, old_label: str,
+                new_text: str, new_label: str) -> dict[str, Any]:
+    """用标准库 difflib 生成结构化行级差异与 unified diff 文本。"""
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    if len(old_lines) > MAX_DIFF_LINES or len(new_lines) > MAX_DIFF_LINES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"单侧内容超过 {MAX_DIFF_LINES} 行，暂不生成差异",
+        )
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    lines: list[dict[str, Any]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset in range(i2 - i1):
+                lines.append({
+                    "type": "equal",
+                    "old_no": i1 + offset + 1,
+                    "new_no": j1 + offset + 1,
+                    "text": old_lines[i1 + offset],
+                })
+            continue
+        for i in range(i1, i2):
+            lines.append({"type": "del", "old_no": i + 1, "new_no": None,
+                          "text": old_lines[i]})
+        for j in range(j1, j2):
+            lines.append({"type": "add", "old_no": None, "new_no": j + 1,
+                          "text": new_lines[j]})
+    unified = "\n".join(difflib.unified_diff(
+        old_lines, new_lines, fromfile=old_label, tofile=new_label, lineterm=""
+    ))
+    return {
+        "lines": lines,
+        "unified": unified,
+        "stats": {
+            "added": sum(1 for line in lines if line["type"] == "add"),
+            "removed": sum(1 for line in lines if line["type"] == "del"),
+            "unchanged": sum(1 for line in lines if line["type"] == "equal"),
+        },
+    }
+
+
 def _trash_item_dir(item_id: str) -> Path:
     """回收站条目 ID 只允许安全字符，且解析后必须仍在 .trash/ 内。"""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", item_id or ""):
@@ -576,6 +656,10 @@ class MovePayload(BaseModel):
 
 class RestorePayload(BaseModel):
     id: str = Field(..., description="回收站条目 ID")
+    target_dir: str | None = Field(
+        default=None,
+        description="可选：还原到该目录（空串为 data/ 顶层）；不传则回原位置",
+    )
 
 
 class VersionRestorePayload(BaseModel):
@@ -657,6 +741,24 @@ def restore_version(payload: VersionRestorePayload) -> dict[str, Any]:
     }
 
 
+@app.get("/api/diff/{doc_path:path}", summary="对比文档两个版本或版本与当前内容")
+def diff_doc(
+    doc_path: str,
+    source: str = Query(..., alias="from", description="基准：版本 ID 或 current"),
+    target: str = Query(..., alias="to", description="目标：版本 ID 或 current"),
+) -> dict[str, Any]:
+    current, rel = _parse_doc_path(doc_path)
+    old_text, old_label = _diff_side(rel, source, current)
+    new_text, new_label = _diff_side(rel, target, current)
+    result = _build_diff(old_text, old_label, new_text, new_label)
+    return {
+        "path": rel,
+        "from": source, "to": target,
+        "from_label": old_label, "to_label": new_label,
+        **result,
+    }
+
+
 @app.get("/api/history/{doc_path:path}", summary="列出文档的全部历史版本")
 def list_history(doc_path: str) -> dict[str, Any]:
     _, rel = _parse_doc_path(doc_path)
@@ -704,7 +806,7 @@ def list_trash() -> dict[str, Any]:
     return {"items": items, "count": len(items), "max_items": MAX_TRASH_ITEMS}
 
 
-@app.post("/api/trash/restore", summary="把回收站条目还原到原位置")
+@app.post("/api/trash/restore", summary="把回收站条目还原到原位置或指定目录")
 def restore_trash(payload: RestorePayload) -> dict[str, Any]:
     item_dir = _trash_item_dir(payload.id)
     if not item_dir.is_dir():
@@ -717,14 +819,33 @@ def restore_trash(payload: RestorePayload) -> dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND, detail="回收站条目内容缺失"
         )
     original = str(meta.get("original_path") or "")
-    if meta.get("type") == "file":
-        target, rel = _parse_doc_path(original)
+    kind = "file" if meta.get("type") == "file" else "dir"
+
+    if payload.target_dir is None:
+        if kind == "file":
+            target, rel = _parse_doc_path(original)
+        else:
+            target, rel = _parse_dir_path(original)
     else:
-        target, rel = _parse_dir_path(original)
+        base_dir, base_rel = _parse_target_dir(payload.target_dir)
+        if not base_dir.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"目标目录不存在：{base_rel or 'data/'}",
+            )
+        if kind == "file" and not base_rel:
+            raise _bad_request("文档必须还原到某个目录中，不能直接放在 data/ 顶层")
+        _validate_segment(name)
+        candidate = f"{base_rel}/{name}" if base_rel else name
+        if kind == "file":
+            target, rel = _parse_doc_path(candidate)
+        else:
+            target, rel = _parse_dir_path(candidate)
+
     if target.exists():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"原位置已存在同名条目：{rel}，请先移开或重命名",
+            detail=f"目标位置已存在同名条目：{rel}，请先移开或重命名",
         )
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -734,8 +855,15 @@ def restore_trash(payload: RestorePayload) -> dict[str, Any]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"还原失败：{exc}",
         ) from exc
+    relocated = rel != original
+    if relocated:
+        _history_repath(original, rel, is_dir=kind == "dir")
     shutil.rmtree(item_dir, ignore_errors=True)
-    return {"restored": True, "id": payload.id, "path": rel, "type": meta.get("type")}
+    return {
+        "restored": True, "id": payload.id,
+        "path": rel, "original_path": original,
+        "relocated": relocated, "type": kind,
+    }
 
 
 @app.delete("/api/trash", summary="清空回收站（全部彻底删除，不可恢复）")

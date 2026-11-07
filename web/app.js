@@ -131,6 +131,13 @@
         versionContent: '',
         versionSame: null,
         historyBusy: false,
+        historyTab: 'source',
+        diffBase: 'current',
+        diffLines: [],
+        diffStats: null,
+        showRestoreLocation: false,
+        restoreSource: { id: '', name: '', type: 'file', original_path: '' },
+        restoreTarget: '',
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null,
@@ -186,6 +193,15 @@
       },
       latestVersionNumber: function () {
         return this.historyVersions.length ? this.historyVersions[0].version : 0;
+      },
+      selectedVersionNumber: function () {
+        var id = this.selectedVersion;
+        var found = this.historyVersions.find(function (item) { return item.id === id; });
+        return found ? found.version : 0;
+      },
+      restoreOptions: function () {
+        if (this.restoreSource.type === 'file') return this.allDirs;
+        return [{ name: '文档库（顶层）', path: '', depth: -1 }].concat(this.allDirs);
       },
       parentDirPath: function () {
         if (!this.activeDirPath) return '';
@@ -246,6 +262,12 @@
         if (this.selectedVersion && this.versionContent !== '') {
           this.versionSame = this.versionContent === this.content;
         }
+        if (this.showHistory && this.historyTab === 'diff' && this.diffBase === 'current') {
+          this.loadDiff();
+        }
+      },
+      diffBase: function () {
+        if (this.showHistory && this.historyTab === 'diff') this.loadDiff();
       }
     },
 
@@ -370,6 +392,40 @@
         }
       },
 
+      openRestoreLocation: function (item) {
+        this.restoreSource = {
+          id: item.id, name: item.name, type: item.type,
+          original_path: item.original_path
+        };
+        var index = String(item.original_path || '').lastIndexOf('/');
+        this.restoreTarget = index > 0
+          ? String(item.original_path).slice(0, index) : '';
+        var options = this.restoreOptions;
+        var target = this.restoreTarget;
+        if (!options.some(function (option) { return option.path === target; })) {
+          this.restoreTarget = options.length ? options[0].path : '';
+        }
+        this.showRestoreLocation = true;
+      },
+
+      submitRestoreLocation: async function () {
+        if (this.trashBusy || !this.restoreOptions.length) return;
+        this.trashBusy = true;
+        try {
+          var result = await api('POST', '/api/trash/restore',
+            { id: this.restoreSource.id, target_dir: this.restoreTarget });
+          this.showRestoreLocation = false;
+          await this.loadTrash();
+          await this.refreshTree();
+          this.notify('已还原到 ' + result.path
+            + (result.relocated ? '（历史一并迁移）' : ''), 'success');
+        } catch (error) {
+          this.notify('还原失败：' + error.message, 'error');
+        } finally {
+          this.trashBusy = false;
+        }
+      },
+
       versionLabel: function (action) {
         if (action === 'created') return '创建';
         if (action === 'restore') return '还原';
@@ -382,8 +438,37 @@
         this.selectedVersion = '';
         this.versionContent = '';
         this.versionSame = null;
+        this.historyTab = 'source';
+        this.diffBase = 'current';
+        this.diffLines = [];
+        this.diffStats = null;
         this.showHistory = true;
         await this.loadHistory();
+      },
+
+      switchHistoryTab: function (tab) {
+        this.historyTab = tab;
+        if (tab === 'diff') this.loadDiff();
+      },
+
+      loadDiff: async function () {
+        if (!this.selectedVersion) {
+          this.diffLines = [];
+          this.diffStats = null;
+          return;
+        }
+        var url = '/api/diff/' + encodePath(this.historyPath)
+          + '?from=' + encodeURIComponent(this.diffBase)
+          + '&to=' + encodeURIComponent(this.selectedVersion);
+        try {
+          var data = await api('GET', url);
+          this.diffLines = data.lines || [];
+          this.diffStats = data.stats || null;
+        } catch (error) {
+          this.diffLines = [];
+          this.diffStats = null;
+          this.notify('差异计算失败：' + error.message, 'error');
+        }
       },
 
       loadHistory: async function () {
@@ -412,6 +497,7 @@
           this.selectedVersion = versionId;
           this.versionContent = data.content || '';
           this.versionSame = this.versionContent === this.content;
+          if (this.historyTab === 'diff') await this.loadDiff();
         } catch (error) {
           this.notify('读取版本失败：' + error.message, 'error');
         } finally {
@@ -433,6 +519,7 @@
           await this.loadHistory();
           await this.refreshTree();
           this.versionSame = this.versionContent === this.content;
+          if (this.historyTab === 'diff') await this.loadDiff();
           this.notify('已还原到 v' + result.version_number + '（生成新版本）', 'success');
         } catch (error) {
           this.notify('还原版本失败：' + error.message, 'error');
@@ -450,6 +537,8 @@
           this.selectedVersion = '';
           this.versionContent = '';
           this.versionSame = null;
+          this.diffLines = [];
+          this.diffStats = null;
           await this.loadHistory();
           this.notify('历史版本已清空', 'success');
         } catch (error) {

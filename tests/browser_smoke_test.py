@@ -210,6 +210,13 @@ def main() -> int:
               bool(hist_buttons) and "disabled" not in hist_buttons[0]
               and bool(dir_hist_buttons) and "disabled" in dir_hist_buttons[0],
               f"-> doc={hist_buttons[:1]} dir={dir_hist_buttons[:1]}")
+        index_html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+        check("历史面板绑定源码/差异切换与行级差异渲染",
+              "switchHistoryTab('diff')" in index_html
+              and "diffLines" in index_html and "diff-line" in index_html)
+        check("回收站条目提供还原到目录入口",
+              "openRestoreLocation(item)" in index_html
+              and "showRestoreLocation" in index_html)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

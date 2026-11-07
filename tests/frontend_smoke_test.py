@@ -38,6 +38,8 @@ STATIC_ASSETS = (
 )
 TEST_DOC = "Projects/__frontend__渲染验证.md"
 TEST_DIR = "Projects/__frontend__新目录"
+RESTORE_DOC = "Projects/__frontend__定向还原.md"
+RESTORE_NEW = "Knowledge/__frontend__定向还原.md"
 
 PASSED = 0
 TOTAL = 0
@@ -249,6 +251,18 @@ console.log('math-ok');
               and "loadHistory" in app_js and "previewVersion" in app_js)
         check("样式提供版本历史列表与预览区", ".history-dialog" in style_css
               and ".history-list" in style_css and ".history-preview" in style_css)
+        check("页面提供差异视图与基准版本选择",
+              "switchHistoryTab('diff')" in index_html and "diffBase" in index_html
+              and "diffLines" in index_html and "diff-line" in index_html
+              and ".diff-line.add" in style_css and ".diff-line.del" in style_css)
+        check("页面提供回收站还原到目录的入口",
+              "openRestoreLocation(item)" in index_html
+              and "showRestoreLocation" in index_html
+              and "submitRestoreLocation" in index_html
+              and "restoreOptions" in index_html)
+        check("交互逻辑调用差异对比与定向还原接口",
+              "'/api/diff/'" in app_js and "loadDiff" in app_js
+              and "target_dir: this.restoreTarget" in app_js)
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
@@ -294,12 +308,25 @@ console.log('math-ok');
         code, raw, _ = fetch(base_url, "/api/versions/" + first_id)
         check("前端链路：读取历史版本源码", code == 200
               and (as_json(raw) or {}).get("content") == content, f"-> {code}")
+        code, raw, _ = fetch(base_url, f"/api/docs/{encoded}", "PUT",
+                             {"content": content + "\n新增一行\n"})
+        changed = as_json(raw) or {}
+        check("前端链路：保存变化生成第二版", code == 200
+              and changed.get("version_number") == 2, f"-> {code} {raw[:120]}")
+        diff_url = (f"/api/diff/{encoded}?from={first_id}&to="
+                    + changed.get("version", ""))
+        code, raw, _ = fetch(base_url, diff_url)
+        diff = as_json(raw) or {}
+        check("前端链路：行级差异对比可用", code == 200
+              and diff.get("stats", {}).get("added", 0) >= 1
+              and any(line.get("type") == "add" for line in diff.get("lines", [])),
+              f"-> {code} {raw[:150]}")
         code, raw, _ = fetch(base_url, "/api/history/restore", "POST",
                              {"path": TEST_DOC, "version_id": first_id})
         check("前端链路：还原历史版本", code == 200
               and (as_json(raw) or {}).get("restored") is True, f"-> {code} {raw[:150]}")
         code, raw, _ = fetch(base_url, f"/api/history/{encoded}")
-        check("还原后历史版本数增加", (as_json(raw) or {}).get("count") == 2,
+        check("还原后历史版本数增加", (as_json(raw) or {}).get("count") == 3,
               f"-> {code} {raw[:120]}")
 
         code, raw, _ = fetch(base_url, "/api/move", "PATCH",
@@ -363,6 +390,23 @@ console.log('math-ok');
         check("彻底删除后列表不再含该条目", code == 200
               and not any(item.get("id") == again["trash_id"]
                           for item in (as_json(raw) or {}).get("items", [])), f"-> {code}")
+
+        enc_rdoc = urllib.parse.quote(RESTORE_DOC, safe="/")
+        code, _, _ = fetch(base_url, f"/api/docs/{enc_rdoc}", "PUT", {"content": "# 定向还原\n"})
+        check("准备还原到新目录的文档", code == 200, f"-> {code}")
+        code, raw, _ = fetch(base_url, f"/api/docs/{enc_rdoc}", "DELETE")
+        trashed = as_json(raw) or {}
+        code, raw, _ = fetch(base_url, "/api/trash/restore", "POST",
+                             {"id": trashed.get("trash_id", ""), "target_dir": "Knowledge"})
+        relocated = as_json(raw) or {}
+        check("前端链路：回收站还原到指定目录", code == 200
+              and relocated.get("relocated") is True
+              and relocated.get("path") == RESTORE_NEW, f"-> {code} {raw[:150]}")
+        code, _, _ = fetch(base_url, f"/api/docs/{urllib.parse.quote(RESTORE_NEW, safe='/')}")
+        check("定向还原后新位置文档可读", code == 200, f"-> {code}")
+        code, raw, _ = fetch(base_url, f"/api/history/{urllib.parse.quote(RESTORE_NEW, safe='/')}")
+        check("定向还原后历史迁移到新路径", (as_json(raw) or {}).get("count") == 1,
+              f"-> {code} {raw[:120]}")
     finally:
         server.terminate()
         try:
@@ -376,6 +420,11 @@ console.log('math-ok');
         except OSError:
             pass
         shutil.rmtree(BASE_DIR / "data" / TEST_DIR, ignore_errors=True)
+        for leftover in (TEST_DOC, RESTORE_DOC, RESTORE_NEW):
+            try:
+                (BASE_DIR / "data" / leftover).unlink(missing_ok=True)
+            except OSError:
+                pass
         cleanup_test_trash(BASE_DIR)
         cleanup_test_history(BASE_DIR)
         output = server.stdout.read() if server.stdout else ""
