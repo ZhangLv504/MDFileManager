@@ -521,6 +521,10 @@
         this.importOverwrite = false;
         this.importResult = null;
         this.showImport = true;
+        var self = this;
+        Vue.nextTick(function () {
+          if (self.$refs.importPickFirst) self.$refs.importPickFirst.focus();
+        });
       },
 
       pickImportFiles: function () {

@@ -191,7 +191,7 @@ py -3.12 -m venv .venv
 # 可用环境变量调整：MDFM_HOST / MDFM_PORT
 ```
 
-前台运行时按 `Ctrl+C` 停止。开发期如需热重载：`--reload`（依赖 watchfiles）。**修改 `main.py` 后必须重启服务**；前端静态文件则是即时生效的。
+前台运行时按 `Ctrl+C` 停止。开发期如需热重载：`--reload`（依赖 watchfiles）。**修改 `main.py` 后必须重启服务**；前端静态文件即时生效，且服务端已为静态资源设置 `Cache-Control: no-cache, must-revalidate`，浏览器每次都会校验 `ETag`，不会因缓存旧 `app.js` 导致按钮点击无反应（万一用了旧缓存，按 `Ctrl+Shift+R` 强制刷新即可）。同一时间只能有一个进程占用 8000 端口，重复启动会报端口被占用，先停掉旧进程再启动。
 
 ### 4.2 访问地址与接口
 

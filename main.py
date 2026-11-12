@@ -102,6 +102,21 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    """静态资源禁用强缓存，避免改了 app.js 后浏览器仍执行旧脚本。
+
+    StaticFiles 只带 Last-Modified / ETag，不声明 Cache-Control 时浏览器会用
+    启发式缓存直接复用本地副本。改用 no-cache 后每次都会带条件请求验证，
+    内容未变返回 304，变了才重新下载；API 响应不施加此策略。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and path not in ("/docs", "/openapi.json"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 def _validate_segment(part: str) -> str:
     """校验单段名称，重命名与路径解析共用同一套规则。"""
     if part in ("", ".", ".."):

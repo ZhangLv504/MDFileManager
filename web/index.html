@@ -346,6 +346,7 @@
     <div class="dialog import-dialog">
       <h3>从系统文件夹导入 Markdown</h3>
       <p>在浏览器里选择本机文件或整个文件夹，内容会写入当前项目的 <code>data/</code> 目录。</p>
+      <p class="import-step">第 1 步：点下面的按钮选文件（会打开系统文件选择窗口）　→　第 2 步：点右下角「开始导入」</p>
       <div class="import-target">
         <label>目标目录
           <select v-model="importTarget">
@@ -355,7 +356,7 @@
         <span class="import-hint">当前目录：{{ searchScopeLabel }}</span>
       </div>
       <div class="import-picker">
-        <button type="button" class="btn" @click="pickImportFiles">选择 .md 文件…</button>
+        <button ref="importPickFirst" type="button" class="btn primary" @click="pickImportFiles">选择 .md 文件…</button>
         <button type="button" class="btn" @click="pickImportFolder">选择整个文件夹…</button>
       </div>
       <input ref="importFileInput" type="file" multiple accept=".md,.markdown,text/markdown" class="hidden-input" @change="onImportPicked">
