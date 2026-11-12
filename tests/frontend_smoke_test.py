@@ -115,6 +115,8 @@ def main() -> int:
             (BASE_DIR / "data" / leftover).unlink(missing_ok=True)
         except OSError:
             pass
+    cleanup_test_trash(BASE_DIR)
+    cleanup_test_history(BASE_DIR)
 
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
