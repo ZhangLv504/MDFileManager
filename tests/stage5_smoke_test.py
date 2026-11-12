@@ -139,6 +139,17 @@ def dump_dom(browser: Path, profile_dir: Path, url: str) -> str:
 
 
 def main() -> int:
+    # 上一次异常中断可能留下测试目录，先清理以保证脚本可重复运行。
+    for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET,
+                     "Projects/__stage5__空目录", "Projects/__stage5__导入"):
+        shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+    for leftover in ("Projects/__stage5__定向还原.md",
+                     "Knowledge/__stage5__定向还原.md"):
+        try:
+            (BASE_DIR / "data" / leftover).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     style_css = (WEB_DIR / "style.css").read_text(encoding="utf-8")
@@ -187,6 +198,17 @@ def main() -> int:
           "'/api/diff/'" in app_js and "loadDiff" in app_js
           and "submitRestoreLocation" in app_js
           and "target_dir: this.restoreTarget" in app_js)
+    check("页面提供导入与搜索界面",
+          ">导入<" in index_html and 'type="search"' in index_html
+          and "webkitdirectory" in index_html and "showImport" in index_html
+          and "showSearch" in index_html and "searchResult" in index_html)
+    check("交互逻辑接入导入与搜索接口",
+          "'/api/import'" in app_js and "'/api/search'" in app_js
+          and "readFileAsText" in app_js and "highlightParts" in app_js
+          and "searchScope" in app_js)
+    check("样式提供搜索框、导入与结果高亮",
+          ".search-box" in style_css and ".import-dialog" in style_css
+          and ".search-list" in style_css and ".match-text mark" in style_css)
     check("交互逻辑接入移动与拖拽整理",
           "'/api/move'" in app_js and "moveEntry" in app_js
           and "recursive=true" in app_js and "onDrop" in app_js
@@ -399,6 +421,31 @@ def main() -> int:
                         + "?recursive=true&confirm=" + urllib.parse.quote("错误"), "DELETE")
         check("递归删除不存在的目录返回 404", code == 404, f"-> {code}")
 
+        import_dir = "Projects/__stage5__导入"
+        code, raw = fetch(base_url, "/api/import", "POST", {
+            "target_dir": import_dir,
+            "files": [
+                {"path": "导入A.md", "content": "# A\n\nSTAGE5_TOKEN 在正文\n"},
+                {"path": "子目录/导入B.md", "content": "# B\n\nSTAGE5_TOKEN 在子目录\n"},
+            ],
+        })
+        imported = as_json(raw) or {}
+        check("批量导入系统文件与子目录", code == 200
+              and imported.get("count") == 2, f"-> {code} {raw[:150]}")
+        code, raw = fetch(base_url, "/api/search?q=STAGE5_TOKEN&dir=" + quote(import_dir))
+        found = as_json(raw) or {}
+        check("搜索当前目录返回匹配文件与位置", code == 200
+              and found.get("count") == 2
+              and all(item.get("dir", "").startswith(import_dir)
+                      for item in found.get("results", [])),
+              f"-> {code} {raw[:200]}")
+        check("搜索结果带命中行号与片段", any(
+            match.get("line", 0) > 0 and "STAGE5_TOKEN" in match.get("text", "")
+            for item in found.get("results", []) for match in item.get("matches", [])))
+        code, raw = fetch(base_url, "/api/search?q=" + quote("不存在的关键词XYZ"))
+        check("无匹配时返回空结果", code == 200
+              and (as_json(raw) or {}).get("count") == 0, f"-> {code} {raw[:120]}")
+
         browser = find_browser()
         if browser:
             print(f"使用浏览器：{browser}")
@@ -427,6 +474,8 @@ def main() -> int:
     finally:
         for relative in (RENAMED_DIR, TEST_DIR, MOVE_TARGET, "Projects/__stage5__空目录"):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+        shutil.rmtree(BASE_DIR / "data" / "Projects" / "__stage5__导入",
+                      ignore_errors=True)
         for leftover in ("Projects/__stage5__定向还原.md",
                          "Knowledge/__stage5__定向还原.md"):
             try:

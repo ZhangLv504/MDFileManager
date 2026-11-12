@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十二均已完成并通过验证；十二个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`。
+> 状态：阶段一～十三均已完成并通过验证；十三个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`。
 
 ## 核心需求与阶段划分
 
@@ -81,6 +81,15 @@
   - 前端历史面板增加「源码 / 差异」切换、基准版本下拉（当前内容或任意版本）、行级增删高亮与统计；编辑时若基准是「当前内容」会实时重算差异。回收站每项新增「还原到…」目录选择对话框，复用 `allDirs` 列表。
 - **输出**：`main.py` 差异与定向还原能力、前端面板、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段十三：从系统文件夹导入与当前目录搜索
+- **目标**：用户提出两点——「添加文档应该能够从系统文件夹中添加」「增加搜索功能，会搜索当前目录下的所有文档，然后输出匹配的文件和位置」。
+- **机制**：
+  - 浏览器不能读取任意本地路径，因此导入走原生 File API：`<input type="file" multiple>` 多选 `.md`，或 `webkitdirectory` 选整个文件夹并保留相对子目录结构；前端用 `file.text()` / `FileReader` 读 UTF-8 文本后一次提交。
+  - 后端 `POST /api/import` 接收 `{target_dir, files: [{path, content}], overwrite}`，复用 `_parse_doc_path` / `_validate_segment` 逐条校验（拒绝 `..`、绝对路径、盘符、隐藏名、非 `.md`、符号链接），同名默认跳过、可开启覆盖；抽出 `_store_doc` 让单篇保存与批量导入共用原子写与版本快照。上限 200 文件 / 20 MB，返回成功 / 跳过 / 失败三组结果。
+  - 后端 `GET /api/search?q=&dir=&mode=` 用 `_walk_markdown_files` 递归收集当前目录下所有可见 `.md`（跳过隐藏项与符号链接），大小写不敏感匹配文件名与正文行，返回**文件路径、所在目录、命中行号与文本片段**及扫描 / 截断统计；上限 2000 篇、100 个结果、200 处命中。
+  - 前端顶栏加搜索框（范围自动取 `activeDirPath` / 文档父目录 / 整个 `data/`）与结果面板（关键词用 `<mark>` 高亮，点击文件名直接打开文档）；顶栏「导入」打开对话框，可选目标目录、覆盖开关、预览已选文件并展示导入结果。
+- **输出**：`main.py` 两个新接口、前端导入与搜索界面、四套验证脚本扩充。未引入新第三方库。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -130,6 +139,10 @@
 - `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；FastAPI 版本 1.6.0。
 - 四套验证全绿：`tests/smoke_test.py` **135/135**、`tests/frontend_smoke_test.py` **74/74**、`tests/browser_smoke_test.py` **33/33**、`tests/stage5_smoke_test.py` **74/74**。
 
+### 阶段十三 · 本地导入与搜索（`stage-13-import-search`）
+- `POST /api/import` 批量导入本机文件 / 文件夹（含子目录、同名跳过或覆盖、逐条安全校验）；`GET /api/search` 递归搜索当前目录并输出文件、位置与命中行；FastAPI 版本 1.7.0。
+- 四套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**。
+
 ### 运行方式
 
 ```bash
@@ -151,8 +164,9 @@ py -3.12 -m venv .venv
 
 - README 列出的标题、表格、代码块高亮、公式已全部覆盖；公式非法时保留原文，不中断页面。
 - 重命名只改名称、移动只改位置；移动拒绝循环、同名冲突、文档移到顶层与符号链接；目录删除支持「仅空目录」与「带名称确认的整目录删除」两种模式。
-- 删除先进回收站，可还原；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；还原只能回原位置，冲突返回 409。
+- 删除先进回收站，可还原到原位置或指定目录；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；目标同名返回 409。
 - 版本历史按文档路径归档，重命名 / 移动 / 从回收站定向还原都会迁移；整目录递归删除后若不走回收站还原，其下文档的旧历史仅保留旧路径记录。差异为 `difflib` 逐行对比，单侧上限 3000 行；每篇最多 50 版，全局 500 篇 / 50 MB。
+- 导入只接受浏览器给出的相对文件名，服务端不读取任意系统路径；搜索为大小写不敏感的子串匹配，不做分词 / 正则 / 语义检索，也不索引隐藏文件。两者均有硬上限并在结果中提示截断。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
-- 未涉及多用户、权限、移动端适配与文档版本历史——按业务定义，同名覆盖即版本更新。
+- 未涉及多用户、权限与移动端适配；文档版本历史已在阶段十一补齐（同名覆盖即生成一个新版本）。

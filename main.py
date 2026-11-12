@@ -55,6 +55,14 @@ MAX_VERSIONS_PER_DOC = 50
 MAX_HISTORY_DOCS = 500
 MAX_HISTORY_BYTES = 50 * 1024 * 1024
 MAX_DIFF_LINES = 3000
+# 批量导入与全文搜索的上限（避免一次请求拖垮本地服务）。
+MAX_IMPORT_FILES = 200
+MAX_IMPORT_BYTES = 20 * 1024 * 1024
+MAX_SEARCH_FILES = 2000
+MAX_SEARCH_RESULTS = 100
+MAX_SEARCH_MATCHES = 200
+MAX_MATCHES_PER_FILE = 10
+MAX_QUERY_CHARS = 200
 
 # Windows / POSIX 文件名非法字符，反斜杠一并禁止，避免 Windows 上被当作分隔符。
 _FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"|?*\\]')
@@ -82,7 +90,7 @@ _ensure_data_root()
 
 app = FastAPI(
     title="MDFileManager API",
-    version="1.6.0",
+    version="1.7.0",
     description="本地 Markdown 文档与目录的文件系统映射接口（纯 JSON RESTful API）",
 )
 app.add_middleware(
@@ -640,8 +648,82 @@ def _trash_move(target: Path, rel: str, *, recursive: bool) -> dict[str, Any]:
     return {**meta, "trashed": True}
 
 
+def _walk_markdown_files(base: Path, rel: Path) -> list[tuple[Path, str]]:
+    """递归收集目录下所有可见 .md 文件，跳过隐藏项与符号链接。"""
+    found: list[tuple[Path, str]] = []
+    try:
+        entries = sorted(base.iterdir(), key=lambda item: item.name.casefold())
+    except OSError:
+        return found
+    for entry in entries:
+        if entry.name.startswith(".") or entry.is_symlink():
+            continue
+        child_rel = rel / entry.name
+        if entry.is_dir():
+            found.extend(_walk_markdown_files(entry, child_rel))
+        elif entry.is_file() and entry.suffix.lower() == ".md":
+            found.append((entry, child_rel.as_posix()))
+        if len(found) >= MAX_SEARCH_FILES:
+            break
+    return found[:MAX_SEARCH_FILES]
+
+
+def _store_doc(target: Path, rel: str, data: bytes) -> dict[str, Any]:
+    """写入文档并自动记录版本快照；保存与批量导入共用。"""
+    existed = target.exists()
+    if existed and not target.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="目标路径不是文件"
+        )
+    unchanged = False
+    if existed:
+        try:
+            unchanged = target.read_bytes() == data
+        except OSError:
+            unchanged = False
+    _atomic_write(target, data)
+    version = None
+    if not unchanged:
+        version = _history_append(rel, data,
+                                  action="updated" if existed else "created")
+    return {
+        "path": rel,
+        "action": "updated" if existed else "created",
+        "size": len(data),
+        "version": version["id"] if version else None,
+        "version_number": version["version"] if version else None,
+    }
+
+
+def _validate_import_relative(raw: str) -> str:
+    """校验浏览器给出的相对路径（含子目录），只接受 .md 文件。"""
+    if not raw or "\x00" in raw:
+        raise _bad_request("导入路径为空")
+    if raw.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", raw):
+        raise _bad_request("导入路径不能是绝对路径")
+    if "\\" in raw:
+        raise _bad_request("导入路径请使用 / 作为分隔符")
+    parts = raw.split("/")
+    for part in parts:
+        _validate_segment(part)
+    if not parts[-1].lower().endswith(".md"):
+        raise _bad_request("仅支持导入 .md 文件")
+    return "/".join(parts)
+
+
 class DocPayload(BaseModel):
     content: str = Field(..., description="Markdown 源码，UTF-8 文本")
+
+
+class ImportFile(BaseModel):
+    path: str = Field(..., description="相对目标目录的路径，可含子目录")
+    content: str = Field(..., description="Markdown 源码，UTF-8 文本")
+
+
+class ImportPayload(BaseModel):
+    target_dir: str = Field(default="", description="目标目录；空串表示 data/ 顶层")
+    files: list[ImportFile] = Field(..., description="待导入的文件列表")
+    overwrite: bool = Field(default=False, description="同名时是否覆盖")
 
 
 class RenamePayload(BaseModel):
@@ -686,6 +768,144 @@ def get_tree() -> dict[str, Any]:
         "root": "data",
         "tree": _scan(DATA_ROOT, Path()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/import", summary="批量导入系统文件夹中的 Markdown 文档")
+def import_docs(payload: ImportPayload) -> dict[str, Any]:
+    base, base_rel = _parse_target_dir(payload.target_dir)
+    if base.exists():
+        if not base.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="目标路径不是目录"
+            )
+        _assert_plain_path(base)
+    if not payload.files:
+        raise _bad_request("没有待导入的文件")
+    if len(payload.files) > MAX_IMPORT_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"单次最多导入 {MAX_IMPORT_FILES} 个文件",
+        )
+    prepared: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    for item in payload.files:
+        data = item.content.encode("utf-8")
+        total_bytes += len(data)
+        prepared.append((item.path, data))
+    if total_bytes > MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"导入内容超过 {MAX_IMPORT_BYTES // 1024 // 1024} MB 上限",
+        )
+
+    if not base.exists():
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"创建目标目录失败：{exc}",
+            ) from exc
+
+    imported: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for raw, data in prepared:
+        try:
+            safe_relative = _validate_import_relative(raw)
+            candidate = f"{base_rel}/{safe_relative}" if base_rel else safe_relative
+            target, rel = _parse_doc_path(candidate)
+            if target.is_symlink():
+                raise _bad_request("目标路径是符号链接")
+            if len(data) > MAX_DOC_BYTES:
+                raise _bad_request("单个文档超过大小上限")
+            if target.exists() and not payload.overwrite:
+                skipped.append({"source": raw, "path": rel, "reason": "目标已存在"})
+                continue
+            result = _store_doc(target, rel, data)
+            imported.append({"source": raw, "path": rel, "action": result["action"]})
+        except HTTPException as exc:
+            errors.append({"source": raw, "error": str(exc.detail)})
+        except (OSError, UnicodeError) as exc:
+            errors.append({"source": raw, "error": str(exc)})
+    return {
+        "target_dir": base_rel,
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "count": len(imported),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+    }
+
+
+@app.get("/api/search", summary="递归搜索当前目录下所有 Markdown 文档")
+def search_docs(
+    q: str = Query(default=""),
+    directory: str = Query(default="", alias="dir"),
+    mode: str = Query(default="both"),
+) -> dict[str, Any]:
+    query = q.strip()
+    if not query:
+        raise _bad_request("搜索关键词不能为空")
+    if len(query.encode("utf-8")) > MAX_QUERY_CHARS:
+        raise _bad_request("搜索关键词过长")
+    if mode not in ("name", "content", "both"):
+        raise _bad_request("mode 只能是 name / content / both")
+
+    base, base_rel = _parse_target_dir(directory)
+    if not base.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="搜索目录不存在"
+        )
+    _assert_plain_path(base)
+    needle = query.casefold()
+    start_rel = Path(base_rel) if base_rel else Path()
+    files = _walk_markdown_files(base, start_rel)
+
+    results: list[dict[str, Any]] = []
+    total_matches = 0
+    for path, rel in files:
+        if len(results) >= MAX_SEARCH_RESULTS or total_matches >= MAX_SEARCH_MATCHES:
+            break
+        matches: list[dict[str, Any]] = []
+        if mode in ("name", "both") and needle in path.name.casefold():
+            matches.append({"kind": "name", "line": 0, "text": path.name})
+        if mode in ("content", "both"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if needle in line.casefold():
+                    matches.append({
+                        "kind": "content", "line": lineno,
+                        "text": line.strip()[:200],
+                    })
+                    if len(matches) >= MAX_MATCHES_PER_FILE:
+                        break
+        if not matches:
+            continue
+        try:
+            stat_result = path.stat()
+        except OSError:
+            continue
+        results.append({
+            "path": rel,
+            "name": path.name,
+            "dir": rel.rsplit("/", 1)[0] if "/" in rel else "",
+            "size": stat_result.st_size,
+            "modified": _iso_time(stat_result.st_mtime),
+            "matches": matches,
+            "match_count": len(matches),
+        })
+        total_matches += len(matches)
+    return {
+        "dir": base_rel, "query": query, "mode": mode,
+        "results": results, "count": len(results), "scanned": len(files),
+        "truncated": len(results) >= MAX_SEARCH_RESULTS
+        or total_matches >= MAX_SEARCH_MATCHES,
     }
 
 
@@ -1102,30 +1322,7 @@ def save_doc(doc_path: str, payload: DocPayload) -> dict[str, Any]:
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"文档超过 {MAX_DOC_BYTES // 1024 // 1024} MB 上限",
         )
-    existed = target.exists()
-    if existed and not target.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="目标路径不是文件",
-        )
-    unchanged = False
-    if existed:
-        try:
-            unchanged = target.read_bytes() == data
-        except OSError:
-            unchanged = False
-    _atomic_write(target, data)
-    version = None
-    if not unchanged:
-        version = _history_append(rel, data,
-                                  action="updated" if existed else "created")
-    return {
-        "path": rel,
-        "action": "updated" if existed else "created",
-        "size": len(data),
-        "version": version["id"] if version else None,
-        "version_number": version["version"] if version else None,
-    }
+    return _store_doc(target, rel, data)
 
 
 @app.delete("/api/docs/{doc_path:path}", summary="删除指定 MD 文件并移入回收站")

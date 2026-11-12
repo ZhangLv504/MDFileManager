@@ -40,6 +40,7 @@ TEST_DOC = "Projects/__frontend__渲染验证.md"
 TEST_DIR = "Projects/__frontend__新目录"
 RESTORE_DOC = "Projects/__frontend__定向还原.md"
 RESTORE_NEW = "Knowledge/__frontend__定向还原.md"
+IMPORT_DIR = "Projects/__frontend__导入"
 
 PASSED = 0
 TOTAL = 0
@@ -106,6 +107,15 @@ def find_node(nodes, path: str):
 
 
 def main() -> int:
+    # 清理上一次异常中断可能残留的测试文件，保证脚本可重复运行。
+    for relative in (TEST_DIR, IMPORT_DIR):
+        shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
+    for leftover in (TEST_DOC, RESTORE_DOC, RESTORE_NEW):
+        try:
+            (BASE_DIR / "data" / leftover).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
 
@@ -263,6 +273,20 @@ console.log('math-ok');
         check("交互逻辑调用差异对比与定向还原接口",
               "'/api/diff/'" in app_js and "loadDiff" in app_js
               and "target_dir: this.restoreTarget" in app_js)
+        check("顶栏提供搜索框与导入入口",
+              'type="search"' in index_html and "runSearch" in index_html
+              and ">导入<" in index_html and "openImport" in index_html)
+        check("页面提供导入对话框与搜索结果面板",
+              "showImport" in index_html and "showSearch" in index_html
+              and "webkitdirectory" in index_html and "highlightParts" in index_html
+              and "search-item" in index_html and "import-summary" in index_html)
+        check("交互逻辑调用导入与搜索接口",
+              "'/api/import'" in app_js and "'/api/search'" in app_js
+              and "submitImport" in app_js and "onImportPicked" in app_js
+              and "readFileAsText" in app_js and "searchScope" in app_js)
+        check("样式提供搜索框、导入与结果列表",
+              ".search-box" in style_css and ".import-dialog" in style_css
+              and ".search-list" in style_css and ".match-text mark" in style_css)
 
         code, raw, ctype = fetch(base_url, "/docs")
         check("Swagger UI 仍可访问（接口先行契约）",
@@ -407,6 +431,34 @@ console.log('math-ok');
         code, raw, _ = fetch(base_url, f"/api/history/{urllib.parse.quote(RESTORE_NEW, safe='/')}")
         check("定向还原后历史迁移到新路径", (as_json(raw) or {}).get("count") == 1,
               f"-> {code} {raw[:120]}")
+
+        # 阶段十三：批量导入与当前目录搜索的前端链路
+        code, raw, _ = fetch(base_url, "/api/import", "POST", {
+            "target_dir": IMPORT_DIR,
+            "files": [
+                {"path": "笔记.md", "content": "# 导入\n\nFRONTEND_TOKEN 命中内容\n"},
+                {"path": "子目录/深层.md", "content": "# 深层\n\nFRONTEND_TOKEN 也在子目录\n"},
+            ],
+        })
+        imported = as_json(raw) or {}
+        check("前端链路：批量导入文件与子目录", code == 200
+              and imported.get("count") == 2, f"-> {code} {raw[:150]}")
+        code, raw, _ = fetch(base_url, "/api/search?q=FRONTEND_TOKEN&dir="
+                             + urllib.parse.quote(IMPORT_DIR))
+        found = as_json(raw) or {}
+        check("前端链路：搜索当前目录返回文件与位置", code == 200
+              and found.get("count") == 2
+              and all(item.get("dir") == IMPORT_DIR
+                      or item.get("dir", "").startswith(IMPORT_DIR + "/")
+                      for item in found.get("results", [])),
+              f"-> {code} {raw[:200]}")
+        check("搜索结果包含命中行号", any(
+            match.get("kind") == "content" and match.get("line", 0) > 0
+            for item in found.get("results", []) for match in item.get("matches", [])))
+        code, raw, _ = fetch(base_url, "/api/search?q=FRONTEND_TOKEN&dir="
+                             + urllib.parse.quote(IMPORT_DIR) + "&mode=name")
+        check("按文件名搜索在内容命中时不误报", code == 200
+              and (as_json(raw) or {}).get("count") == 0, f"-> {code} {raw[:120]}")
     finally:
         server.terminate()
         try:
@@ -420,6 +472,7 @@ console.log('math-ok');
         except OSError:
             pass
         shutil.rmtree(BASE_DIR / "data" / TEST_DIR, ignore_errors=True)
+        shutil.rmtree(BASE_DIR / "data" / IMPORT_DIR, ignore_errors=True)
         for leftover in (TEST_DOC, RESTORE_DOC, RESTORE_NEW):
             try:
                 (BASE_DIR / "data" / leftover).unlink(missing_ok=True)

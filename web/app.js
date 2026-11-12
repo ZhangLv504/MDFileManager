@@ -76,6 +76,19 @@
     return null;
   }
 
+  function readFileAsText(file) {
+    return new Promise(function (resolve, reject) {
+      if (typeof file.text === 'function') {
+        file.text().then(resolve, reject);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result || '')); };
+      reader.onerror = function () { reject(reader.error || new Error('读取文件失败')); };
+      reader.readAsText(file, 'UTF-8');
+    });
+  }
+
   async function api(method, url, body) {
     var options = { method: method, headers: {} };
     if (body !== undefined) {
@@ -138,6 +151,18 @@
         showRestoreLocation: false,
         restoreSource: { id: '', name: '', type: 'file', original_path: '' },
         restoreTarget: '',
+        searchQuery: '',
+        searchBusy: false,
+        showSearch: false,
+        searchResult: { query: '', count: 0, scanned: 0, results: [], truncated: false },
+        showImport: false,
+        importTarget: '',
+        importFiles: [],
+        importIgnored: 0,
+        importKilobytes: 0,
+        importOverwrite: false,
+        importBusy: false,
+        importResult: null,
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null,
@@ -202,6 +227,25 @@
       restoreOptions: function () {
         if (this.restoreSource.type === 'file') return this.allDirs;
         return [{ name: '文档库（顶层）', path: '', depth: -1 }].concat(this.allDirs);
+      },
+      searchScope: function () {
+        if (this.activeDirPath) return this.activeDirPath;
+        if (this.currentPath) {
+          var index = this.currentPath.lastIndexOf('/');
+          return index > 0 ? this.currentPath.slice(0, index) : '';
+        }
+        return '';
+      },
+      searchScopeLabel: function () {
+        return this.searchScope ? this.searchScope + '（含子目录）' : '整个文档库';
+      },
+      searchPlaceholder: function () {
+        return '搜索 ' + (this.searchScope || '整个文档库') + ' 下的文档…';
+      },
+      importPreview: function () {
+        return this.importFiles.slice(0, 8).map(function (item) {
+          return { path: item.path };
+        });
       },
       parentDirPath: function () {
         if (!this.activeDirPath) return '';
@@ -423,6 +467,119 @@
           this.notify('还原失败：' + error.message, 'error');
         } finally {
           this.trashBusy = false;
+        }
+      },
+
+      runSearch: async function () {
+        var query = this.searchQuery.trim();
+        if (!query) { this.notify('请输入搜索关键词', 'error'); return; }
+        this.searchBusy = true;
+        try {
+          var url = '/api/search' + '?q=' + encodeURIComponent(query)
+            + '&dir=' + encodeURIComponent(this.searchScope) + '&mode=both';
+          this.searchResult = await api('GET', url);
+          this.showSearch = true;
+        } catch (error) {
+          this.notify('搜索失败：' + error.message, 'error');
+        } finally {
+          this.searchBusy = false;
+        }
+      },
+
+      highlightParts: function (text) {
+        var value = String(text || '');
+        var needle = String(this.searchResult.query || this.searchQuery || '').toLowerCase();
+        if (!needle || !value) return [{ text: value, hit: false }];
+        var lower = value.toLowerCase();
+        var parts = [];
+        var cursor = 0;
+        while (cursor < value.length) {
+          var at = lower.indexOf(needle, cursor);
+          if (at < 0) {
+            parts.push({ text: value.slice(cursor), hit: false });
+            break;
+          }
+          if (at > cursor) parts.push({ text: value.slice(cursor, at), hit: false });
+          parts.push({ text: value.slice(at, at + needle.length), hit: true });
+          cursor = at + needle.length;
+        }
+        return parts.length ? parts : [{ text: value, hit: false }];
+      },
+
+      openSearchResult: function (item) {
+        this.showSearch = false;
+        if (item.dir) this.activeDirPath = item.dir;
+        this.selectDoc(item.path);
+      },
+
+      openImport: function () {
+        this.importTarget = this.selectedDir || this.searchScope
+          || (this.allDirs.length ? this.allDirs[0].path : '');
+        this.importFiles = [];
+        this.importIgnored = 0;
+        this.importKilobytes = 0;
+        this.importOverwrite = false;
+        this.importResult = null;
+        this.showImport = true;
+      },
+
+      pickImportFiles: function () {
+        if (this.$refs.importFileInput) this.$refs.importFileInput.click();
+      },
+
+      pickImportFolder: function () {
+        if (this.$refs.importDirInput) this.$refs.importDirInput.click();
+      },
+
+      onImportPicked: function (event) {
+        var input = event.target;
+        var picked = Array.prototype.slice.call(input.files || []);
+        var kept = [];
+        var ignored = 0;
+        picked.forEach(function (file) {
+          var relative = file.webkitRelativePath || file.name || '';
+          if (!/\.md$/i.test(relative)) { ignored += 1; return; }
+          kept.push({ file: file, path: relative });
+        });
+        this.importIgnored = ignored;
+        this.importResult = null;
+        var self = this;
+        Promise.all(kept.map(function (item) {
+          return readFileAsText(item.file).then(function (text) {
+            return { path: item.path, content: text };
+          });
+        })).then(function (list) {
+          self.importFiles = list;
+          var characters = list.reduce(function (total, item) {
+            return total + item.content.length;
+          }, 0);
+          self.importKilobytes = Math.round(characters / 1024 * 10) / 10;
+        }).catch(function (error) {
+          self.notify('读取本地文件失败：' + (error && error.message ? error.message : error), 'error');
+        });
+        try { input.value = ''; } catch (error) { /* 允许重复选择同一文件 */ }
+      },
+
+      submitImport: async function () {
+        if (!this.importFiles.length || !this.importTarget || this.importBusy) return;
+        this.importBusy = true;
+        try {
+          var result = await api('POST', '/api/import', {
+            target_dir: this.importTarget,
+            files: this.importFiles,
+            overwrite: this.importOverwrite
+          });
+          this.importResult = result;
+          this.importFiles = [];
+          this.importIgnored = 0;
+          this.importKilobytes = 0;
+          await this.refreshTree();
+          this.notify('导入完成：成功 ' + result.count + '，跳过 ' + result.skipped_count
+            + '，失败 ' + result.error_count, result.error_count ? 'error' : 'success');
+        } catch (error) {
+          this.notify('导入失败：' + error.message, 'error');
+        } finally {
+          this.importBusy = false;
         }
       },
 

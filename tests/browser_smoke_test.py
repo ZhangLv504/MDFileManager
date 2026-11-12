@@ -217,6 +217,15 @@ def main() -> int:
         check("回收站条目提供还原到目录入口",
               "openRestoreLocation(item)" in index_html
               and "showRestoreLocation" in index_html)
+        check("顶栏真实 DOM 含搜索框与导入按钮",
+              'type="search"' in dom and ">导入<" in dom
+              and 'type="search"' in dom_dir and ">导入<" in dom_dir)
+        check("搜索框提示标明当前目录范围",
+              "下的文档" in dom and "下的文档" in dom_dir)
+        check("页面绑定导入对话框与搜索结果面板",
+              "webkitdirectory" in index_html and "showImport" in index_html
+              and "showSearch" in index_html and "search-item" in index_html
+              and "highlightParts" in index_html)
     finally:
         try:
             fetch(base_url, f"/api/docs/{encoded}", "DELETE")

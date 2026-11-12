@@ -21,12 +21,13 @@ body {
 #app { height: 100%; display: flex; flex-direction: column; position: relative; }
 
 .topbar {
-  height: 66px;
+  min-height: 66px;
   flex: none;
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 0 20px;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  padding: 10px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
@@ -42,7 +43,16 @@ body {
 .current { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .current .label { font-size: 11px; color: var(--muted); }
 .current strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.actions { display: flex; align-items: center; gap: 8px; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.search-box { display: flex; align-items: center; gap: 6px; }
+.search-box input[type="search"] {
+  width: 190px; height: 32px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 7px;
+  font-size: 13px; font-family: inherit; color: var(--text);
+  background: #fff; outline: none;
+}
+.search-box input[type="search"]:focus { border-color: var(--accent); }
+.hidden-input { display: none; }
 
 .status { font-size: 12px; padding: 4px 8px; border-radius: 20px; white-space: nowrap; }
 .status.ok { color: #0f6e56; background: #e1f5ee; }
@@ -325,6 +335,43 @@ body {
 .diff-line.add { background: #e6f6ec; color: #0f6e56; }
 .diff-line.del { background: #fdecec; color: #a32d2d; }
 .diff-line.add .diff-sign, .diff-line.del .diff-sign { font-weight: 600; }
+.import-dialog, .search-dialog { width: 660px; }
+.import-target { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 12px 0; font-size: 13px; }
+.import-target select {
+  height: 32px; min-width: 200px; margin-left: 6px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  color: var(--text); font-size: 13px; font-family: inherit;
+}
+.import-hint { font-size: 12px; color: var(--muted); }
+.import-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.import-summary {
+  max-height: 190px; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fafbfc;
+  font-size: 12px; line-height: 1.7; color: var(--muted);
+}
+.import-summary strong { color: var(--text); font-weight: 500; }
+.import-summary ul { margin: 6px 0 0; padding-left: 18px; }
+.import-summary li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-overwrite { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; }
+.import-result { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); font-size: 12px; }
+.import-result strong { font-weight: 500; }
+.import-error { margin-top: 4px; color: var(--danger); word-break: break-word; }
+.search-list { max-height: 420px; overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; }
+.search-item { padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.search-item:last-child { border-bottom: 0; }
+.search-file {
+  display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 0;
+  border: 0; background: transparent; text-align: left; cursor: pointer;
+}
+.search-file strong { font-size: 13px; font-weight: 500; color: var(--accent); }
+.search-file span { font-size: 12px; color: var(--muted); }
+.search-file:hover strong { text-decoration: underline; }
+.search-matches { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.search-match { display: flex; gap: 8px; font-size: 12px; line-height: 1.6; }
+.match-kind { flex: none; width: 48px; color: #9aa2ac; font-family: "Consolas", monospace; }
+.match-text { flex: 1; min-width: 0; color: #4b5563; word-break: break-word; }
+.match-text mark { background: #fff2a8; color: var(--text); padding: 0 1px; border-radius: 2px; }
+.search-truncated { padding: 10px; font-size: 12px; color: #ba7517; text-align: center; }
 
 .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
 .markdown-body .math-placeholder { color: var(--muted); }

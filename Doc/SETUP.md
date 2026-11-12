@@ -1,7 +1,7 @@
 # 开发环境依赖与启动指南
 
 > 记录本项目开发过程中**安装 / 下载的全部第三方库、安装命令、各库的作用**，以及**如何启动当前项目**。
-> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`（`3038db1`）+ 阶段十二差异对比与定向还原 `stage-12-diff-restore`（`78797f3`）。
+> 对应代码状态：阶段一 `stage-1-backend`（`1446cbd`）+ 阶段二 `stage-2-frontend`（`7f5b8af`）+ 阶段三 `stage-3-render-enhancement`（`c8f3e31`）+ 阶段四 `stage-4-dir-management`（`da0bbf6`）+ 阶段五 `stage-5-cards-rename`（`76cb17c`）+ 阶段六 `stage-6-card-only`（`a51d5cf`）+ 阶段七 `stage-7-dir-page`（`94efd80`）+ 阶段八内容操作 `stage-8-content-ops` + 阶段九内容整理 `stage-9-content-organize`（`2e6fb24`）+ 阶段十回收站 `stage-10-recycle-bin`（`ee290e9`）+ 阶段十一版本历史 `stage-11-version-history`（`3038db1`）+ 阶段十二差异对比与定向还原 `stage-12-diff-restore`（`78797f3`）+ 阶段十三本地导入与搜索 `stage-13-import-search`。
 > 本文命令均在 Windows + Git Bash 下验证通过；CMD / PowerShell 中把 `.venv/Scripts/` 换成 `.venv\Scripts\` 即可。
 
 ---
@@ -162,7 +162,7 @@ cp /tmp/mdfm-katex/package/dist/fonts/*.woff2 web/vendor/katex/fonts/
 | `katex/fonts/*.woff2` | KaTeX **0.16.22**，20 个文件 | 数学符号与字形字体，离线渲染公式必需。 |
 | `../math.js`（项目自写，非第三方） | — | 为 marked 注册公式扩展：先把公式换成占位 `span`，等 DOMPurify 净化、Vue 挂载后再由 KaTeX 原地填充，避免 marked 的反斜杠转义破坏公式。 |
 
-引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～十二均未引入新第三方库：拖拽整理使用浏览器原生 HTML5 Drag & Drop API，回收站与版本历史使用 Python 标准库 `json` / `shutil` / `uuid` / `threading` / `difflib`，无额外依赖。
+引用顺序见 `web/index.html`；完整渲染链为 **marked（含公式扩展）→ DOMPurify 净化 → Vue `v-html` → highlight.js 代码高亮 + KaTeX 公式填充**。代码块里的 `$` 不参与公式解析。阶段四～十三均未引入新第三方库：拖拽整理与文件导入使用浏览器原生 HTML5 Drag & Drop / File API，回收站、版本历史与差异使用 Python 标准库 `json` / `shutil` / `uuid` / `threading` / `difflib`，无额外依赖。
 
 ---
 
@@ -218,16 +218,18 @@ py -3.12 -m venv .venv
 | `POST /api/history/restore` | 把文档还原到指定版本，请求体 `{path, version_id}`，还原动作自身也记为新版本 |
 | `DELETE /api/history/{文档路径}` | 清空该文档的全部历史版本（不可恢复） |
 | `GET /api/diff/{文档路径}?from=…&to=…` | 行级差异对比；`from` / `to` 填版本 ID 或 `current`，返回逐行增删、统计与 unified diff |
+| `POST /api/import` | 批量导入本机选择的 Markdown，请求体 `{target_dir, files: [{path, content}], overwrite}`；`path` 可含子目录 |
+| `GET /api/search?q=关键词&dir=当前目录&mode=both` | 递归搜索当前目录下的所有 `.md`；`dir` 为空表示整个 `data/`，`mode` 可选 `name` / `content` / `both` |
 
 前端页面与 API 由**同一个 uvicorn 进程**提供，因此不存在跨域问题；页面里的 `fetch` 全部走相对路径 `/api/...`。
 
 ### 4.3 验证是否正常运行
 
 ```bash
-.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/回收站/历史/差异 API：135/135
-.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：74/74
-.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：33/33
-.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/历史/卡片：74/74
+.venv/Scripts/python.exe tests/smoke_test.py            # 后端文档/目录/移动/回收站/历史/差异/导入/搜索 API：155/155
+.venv/Scripts/python.exe tests/frontend_smoke_test.py  # 前端 HTTP 层与三级导航：82/82
+.venv/Scripts/python.exe tests/browser_smoke_test.py   # 真实浏览器渲染与拖拽 DOM：36/36
+.venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/历史/导入/搜索/卡片：81/81
 ```
 
 四个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。`tests/trash_cleanup.py` 只清理带测试标记的回收站条目与版本历史，不会碰用户真实数据；`smoke_test.py` 还通过 `MDFM_TRASH_DIR` / `MDFM_HISTORY_DIR` 把回收站与历史指向临时目录，专门验证跨盘移动与「清空」类操作。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四个脚本调用系统自带的无头 Chrome / Edge `--dump-dom`，分别验证文档页与目录页/卡片库的真实 DOM，不下载浏览器。
@@ -236,7 +238,7 @@ py -3.12 -m venv .venv
 
 ```text
 MDFileManager/
-├── main.py                 # FastAPI 应用：文档 CRUD + 目录增删 + 重命名 + 移动 + 回收站 + 版本历史 + 说明 + 静态托管
+├── main.py                 # FastAPI 应用：文档 CRUD + 目录增删 + 重命名 + 移动 + 回收站 + 版本历史 + 批量导入 + 搜索 + 说明 + 静态托管
 ├── requirements.txt        # Python 直接依赖
 ├── data/                   # 用户文档（.md 不入库，仅保留 .gitkeep）
 │   ├── .trash/             # 回收站（隐藏目录，不进目录树，也不入库）
@@ -245,8 +247,8 @@ MDFileManager/
 │   │   └── .description.md # 可选的目录说明（隐藏文件，不出现在文档列表）
 │   └── Knowledge/
 ├── web/                    # 纯静态前端（无侧栏树、无递归卡片组件）
-│   ├── index.html          # 卡片库 / 目录页 / 文档页 + 对话框 + 右键菜单 + 拖放目标 + 回收站 / 版本历史面板
-│   ├── app.js              # 交互逻辑（双击进入 / 面包屑 / 返回 / 右键 / 拖拽移动 / 回收站 / 版本历史 / 编辑 / 深链接）
+│   ├── index.html          # 卡片库 / 目录页 / 文档页 + 对话框 + 右键菜单 + 拖放目标 + 回收站 / 历史 / 导入 / 搜索面板
+│   ├── app.js              # 交互逻辑（三级导航 / 右键 / 拖拽移动 / 回收站 / 历史 / 差异 / 导入 / 搜索 / 编辑 / 深链接）
 │   ├── math.js             # marked 公式扩展 + KaTeX 填充
 │   ├── style.css
 │   └── vendor/             # 已本地化的前端库（含 katex/fonts/*.woff2）
@@ -265,6 +267,8 @@ MDFileManager/
 - **回收站**：顶栏「回收站」按钮带条目数角标，面板列出原路径、名称、类型与删除时间，可「还原」到原位置、「还原到…」选择新目录、「彻底删除」单条或「清空回收站」。数据落在 `data/.trash/<id>/`（`payload/` 保存原内容，`meta.json` 保存原路径等元数据），是隐藏目录，不进目录树也不入库；可用环境变量 `MDFM_TRASH_DIR` 改到其他位置，跨磁盘时自动退化为「复制 + 删除源」。回收站上限 500 条，满时删除会返回 409 提示先清空。
 - **差异对比**：历史面板右侧可在「源码 / 差异」间切换；差异视图用基准下拉选择「当前内容」或任意版本，与左侧选中的目标版本做行级比对，绿色为新增、红色为删除，并显示 `+N −M · K 行未变`。编辑文档时若基准是「当前内容」，差异会实时重算。
 - **版本历史**：打开文档后顶栏「历史」可用，面板左侧是版本列表（最新在前）、右侧是源码预览并标注「与当前内容一致 / 不同」，可「还原此版本」（当前内容会先成为一个新版本）或「清空历史」。每次 `PUT` 保存内容发生变化时自动生成快照；内容完全相同的重复保存不产生新版本。重命名 / 移动文档会连同历史一起迁移，重命名 / 移动目录会迁移其下所有文档的历史。数据落在 `data/.history/`（`index.json` 索引 + `blobs/<id>.md` 快照），可用环境变量 `MDFM_HISTORY_DIR` 改位置；每篇文档最多 50 个版本、全局最多 500 篇文档 / 50 MB，超出自动裁剪最旧版本。
+- **从系统文件夹导入**：顶栏「导入」→ 选择目标目录 → 点「选择 .md 文件…」多选，或点「选择整个文件夹…」用浏览器原生目录选择器导入整个文件夹（**保留子目录结构**，非 `.md` 文件自动跳过）。可勾选「覆盖同名文档」，默认同名跳过；导入结果会分别列出成功 / 跳过 / 失败及失败原因。单次最多 200 个文件、总 20 MB，单个文档仍受 5 MB 限制；路径中的 `..`、绝对路径、隐藏名、非 `.md` 会被逐条拒绝，不影响其他文件。
+- **搜索**：顶栏搜索框输入关键词回车或点「搜索」，范围自动取**当前目录**（目录页取所在目录，文档页取其父目录，卡片库则搜整个 `data/`），并**递归包含所有子目录**。结果面板列出匹配的文件名、所在目录（位置）与命中行（行号 + 文本片段，关键词高亮），点文件名即可直接打开文档。支持按文件名 / 内容 / 两者匹配（API 的 `mode` 参数）；上限 2000 篇扫描、100 个结果文件、200 处命中。
 - **选中目录**：单击卡片或目录页里的文件夹可选中（高亮），「已选目录」显示在页面头部；未选中目录时顶栏「新建」只能建顶层目录，选中后可建子目录或 `.md` 文档。
 - **重命名**：文档名需 `.md` 结尾（省略自动补全），目录名不能以 `.md` 结尾；同名冲突返回 409，非法名称返回 400。重命名后当前目录、当前文档、选中目录与深链接会自动同步。
 - **端口被占用**：换端口 `--port 8001`，或简写启动时设置 `MDFM_PORT=8001`。
@@ -279,9 +283,9 @@ MDFileManager/
 
 | 阶段 | 用到的库 | 交付结果 |
 | --- | --- | --- |
-| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 135/135 |
-| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 74/74 |
-| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 33/33 |
+| 阶段一 · 后端 | fastapi、uvicorn[standard]、pydantic、starlette、httptools、h11、click | 纯 JSON API + Swagger UI；`tests/smoke_test.py` 现为 155/155 |
+| 阶段二 · 前端 | Vue、marked、DOMPurify、highlight.js、github-markdown-css | 文档树 + 高保真渲染编辑器；`tests/frontend_smoke_test.py` 现为 82/82 |
+| 阶段三 · 渲染增强 | KaTeX 0.16.22（JS + CSS + 20 个 woff2 字体）、系统 Chrome / Edge | 数学公式 + 文档深链接；`tests/browser_smoke_test.py` 现为 36/36 |
 | 阶段四 · 目录管理 | 无新增第三方库 | `POST /api/dirs` + 目录选中 + 分类新建 |
 | 阶段五 · 卡片与重命名 | 无新增第三方库 | 顶层卡片视图 + 右键重命名 + 目录说明 |
 | 阶段六 · 纯卡片导航 | 无新增第三方库 | 移除侧栏树 |
@@ -290,7 +294,8 @@ MDFileManager/
 | 阶段九 · 内容整理 | 无新增第三方库（原生 HTML5 Drag & Drop） | `PATCH /api/move` 移动 + 拖拽整理 + 带名称确认的递归删除 |
 | 阶段十 · 回收站 | 无新增第三方库（标准库 json / shutil / uuid） | 删除改为移入回收站、列表/还原/彻底删除/清空、`MDFM_TRASH_DIR` 跨盘回退 |
 | 阶段十一 · 版本历史 | 无新增第三方库（标准库 json / threading / uuid） | 保存自动快照、版本列表/预览/还原/清空、重命名与移动时迁移历史 |
-| 阶段十二 · 差异与定向还原 | 无新增第三方库（标准库 difflib） | `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；`tests/stage5_smoke_test.py` 74/74 |
+| 阶段十二 · 差异与定向还原 | 无新增第三方库（标准库 difflib） | `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史 |
+| 阶段十三 · 本地导入与搜索 | 无新增第三方库（浏览器 File API、标准库） | `POST /api/import` 批量导入本机文件/文件夹（含子目录、覆盖开关）；`GET /api/search` 递归搜索当前目录并输出文件与位置、命中行；`tests/stage5_smoke_test.py` 81/81 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
@@ -301,6 +306,8 @@ MDFileManager/
 - 回收站可还原到原位置，也可点「还原到…」选择新目录（文档不能放到 `data/` 顶层）；目标位置已有同名条目返回 409。还原到新位置时，文档或整目录的版本历史会一并迁移。
 - 版本历史按文档路径归档：文档被移入回收站后历史仍保留，从回收站还原后可继续使用；但文档被「递归删除整个目录」后，如果没有走回收站还原流程，其下文档的历史不会自动迁移到新路径，仅保留旧路径记录。
 - 差异对比使用标准库 `difflib` 生成，单侧最多 3000 行，超出返回 409；是逐行增删的纯文本对比，不做语法级或字符级高亮。
+- 导入由浏览器读取本机文件内容后经 HTTP 提交，服务端**不接受任意系统路径**（只接受浏览器给出的相对文件名）；搜索是大小写不敏感的子串匹配，不做分词、正则或语义检索，且不索引 `.description.md` 等隐藏文件。
+- 导入与搜索都有硬上限：单次 200 文件 / 20 MB；搜索扫描 2000 篇、返回 100 个文件与 200 处命中，超出会截断并提示。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览通过双击进入目录页；深链接仍可直达文档或目录。
 - 浏览器验证脚本依赖系统已安装 Chrome 或 Edge；未安装时对应脚本会跳过或失败，但其余脚本与项目本身不受影响。
 - 未涉及多用户、权限、移动端适配与文档版本历史——按需求，同名覆盖即视为版本更新，数据完全落在本地 `data/`。

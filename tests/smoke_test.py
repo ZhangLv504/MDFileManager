@@ -141,6 +141,9 @@ def main() -> int:
     reloc_new = "Knowledge/__smoke__还原位置.md"
     migrate_dir = "Projects/__smoke__迁移源"
     migrate_new = "Knowledge/__smoke__迁移源"
+    import_target = "Projects/__smoke__导入目标"
+    import_doc_a = import_target + "/导入笔记.md"
+    import_doc_b = import_target + "/子目录/深层笔记.md"
     try:
         check("uvicorn 服务启动并响应 /api/health", wait_ready(client))
         if FAILURES:
@@ -580,6 +583,112 @@ def main() -> int:
         check("整目录还原后其下文档历史一并迁移",
               nested_hist.get("count") == 1, f"-> {code} {nested_hist}")
 
+        # 阶段十三：从系统文件夹批量导入与当前目录全文搜索
+        batch = [
+            {"path": "导入笔记.md", "content": "# 导入笔记\n\n可搜索关键词 ALPHA 出现在这里。\n"},
+            {"path": "子目录/深层笔记.md", "content": "# 深层笔记\n\n第二行也有 ALPHA，并且在子目录。\n"},
+        ]
+        code, imported = client.call("POST", "/api/import",
+                                     {"target_dir": import_target, "files": batch})
+        check("批量导入文件与子目录结构", code == 200 and imported
+              and imported.get("count") == 2
+              and {item["path"] for item in imported.get("imported", [])}
+              == {import_doc_a, import_doc_b}, f"-> {code} {imported}")
+        code, read_a = client.call("GET", f"/api/docs/{urllib.parse.quote(import_doc_a, safe='/')}")
+        check("导入后的文档可读取且内容一致", code == 200 and read_a
+              and read_a.get("content") == batch[0]["content"], f"-> {code}")
+        code, read_b = client.call("GET", f"/api/docs/{urllib.parse.quote(import_doc_b, safe='/')}")
+        check("导入的子目录文档可读取", code == 200 and read_b
+              and read_b.get("content") == batch[1]["content"], f"-> {code}")
+        code, tree_imp = client.call("GET", "/api/tree")
+        check("目录树呈现导入的文档与子目录", code == 200
+              and find_node(tree_imp.get("tree", []), import_doc_a) is not None
+              and find_node(tree_imp.get("tree", []), import_doc_b) is not None,
+              f"-> {code}")
+        code, skipped = client.call("POST", "/api/import",
+                                    {"target_dir": import_target, "files": batch})
+        check("同名文档默认跳过而非覆盖", code == 200 and skipped
+              and skipped.get("count") == 0
+              and skipped.get("skipped_count") == 2, f"-> {code} {skipped}")
+        changed_batch = [
+            {"path": "导入笔记.md", "content": "# 导入笔记\n\n已覆盖，仍有 ALPHA。\n"},
+        ]
+        code, overwritten = client.call("POST", "/api/import",
+                                        {"target_dir": import_target,
+                                         "files": changed_batch, "overwrite": True})
+        check("允许覆盖同名文档", code == 200 and overwritten
+              and overwritten.get("count") == 1
+              and overwritten["imported"][0].get("action") == "updated",
+              f"-> {code} {overwritten}")
+        code, bad_import = client.call("POST", "/api/import",
+                                       {"target_dir": import_target,
+                                        "files": [
+                                            {"path": "../escape.md", "content": "x"},
+                                            {"path": "子目录/../x.md", "content": "x"},
+                                            {"path": "note.txt", "content": "x"},
+                                            {"path": ".hidden.md", "content": "x"},
+                                            {"path": "C:/win.md", "content": "x"},
+                                        ]})
+        check("导入逐条拒绝非法路径且不中断其他文件", code == 200 and bad_import
+              and bad_import.get("error_count") == 5
+              and bad_import.get("count") == 0, f"-> {code} {bad_import}")
+        check("导入未越出 data/ 目录", not (BASE_DIR / "escape.md").exists()
+              and not (BASE_DIR / "data" / "escape.md").exists())
+        code, _ = client.call("POST", "/api/import",
+                              {"target_dir": import_target, "files": []})
+        check("空文件列表返回 400", code == 400, f"-> {code}")
+        code, _ = client.call("POST", "/api/import",
+                              {"target_dir": import_target,
+                               "files": [{"path": f"f{i}.md", "content": "x"}
+                                         for i in range(201)]})
+        check("导入文件数超上限返回 413", code == 413, f"-> {code}")
+
+        code, found = client.call("GET", "/api/search?q=ALPHA&dir="
+                                  + urllib.parse.quote(import_target))
+        check("搜索当前目录返回两个匹配文件", code == 200 and found
+              and found.get("count") == 2
+              and {item["path"] for item in found.get("results", [])}
+              == {import_doc_a, import_doc_b}, f"-> {code} {found}")
+        check("搜索结果带所在目录与命中行",
+              all(item.get("dir") and item.get("matches") for item in found["results"])
+              and any(match.get("kind") == "content" and match.get("line", 0) > 0
+                      for item in found["results"] for match in item["matches"]),
+              f"-> {found['results']}")
+        code, by_name = client.call("GET", "/api/search?q="
+                                    + urllib.parse.quote("深层笔记") + "&dir="
+                                    + urllib.parse.quote(import_target) + "&mode=name")
+        check("按文件名搜索命中子目录文档", code == 200 and by_name
+              and by_name.get("count") == 1
+              and by_name["results"][0]["path"] == import_doc_b, f"-> {code} {by_name}")
+        code, by_content = client.call("GET", "/api/search?q=ALPHA&dir="
+                                       + urllib.parse.quote(import_target) + "&mode=content")
+        check("按内容搜索返回行号与文本片段", code == 200 and by_content
+              and by_content.get("count") == 2
+              and all(match["kind"] == "content"
+                      for item in by_content["results"] for match in item["matches"]),
+              f"-> {code} {by_content}")
+        code, global_find = client.call("GET", "/api/search?q=ALPHA")
+        check("不指定目录时搜索整个文档库", code == 200 and global_find
+              and global_find.get("dir") == ""
+              and global_find.get("count") >= 2, f"-> {code}")
+        code, _ = client.call("GET", "/api/search?q=")
+        check("空关键词返回 400", code == 400, f"-> {code}")
+        code, _ = client.call("GET", "/api/search?q=ALPHA&mode=wrong")
+        check("非法搜索模式返回 400", code == 400, f"-> {code}")
+        code, _ = client.call("GET", "/api/search?q=ALPHA&dir="
+                              + urllib.parse.quote("../escape"))
+        check("搜索接口拒绝路径遍历目录", code in (400, 403, 404), f"-> {code}")
+        code, _ = client.call("GET", "/api/search?q=ALPHA&dir="
+                              + urllib.parse.quote("Projects/__smoke__missing__"))
+        check("搜索不存在的目录返回 404", code == 404, f"-> {code}")
+        code, _ = client.call("PUT", f"/api/descriptions/{urllib.parse.quote(import_target)}",
+                              {"content": "隐藏说明里也写了 ALPHA"})
+        code, hidden_checked = client.call("GET", "/api/search?q=ALPHA&dir="
+                                           + urllib.parse.quote(import_target))
+        check("搜索跳过隐藏的说明文件", code == 200 and hidden_checked
+              and all(".description" not in item["path"]
+                      for item in hidden_checked["results"]), f"-> {code}")
+
         from fastapi import HTTPException
         import main as app_module
 
@@ -650,6 +759,7 @@ def main() -> int:
             hist_dir_renamed,
             migrate_dir,
             migrate_new,
+            import_target,
         ):
             shutil.rmtree(BASE_DIR / "data" / relative, ignore_errors=True)
         shutil.rmtree(trash_dir, ignore_errors=True)

@@ -24,9 +24,14 @@
       <strong>{{ currentPath || activeDirPath || '文档库' }}</strong>
     </div>
     <div class="actions">
+      <form class="search-box" @submit.prevent="runSearch">
+        <input v-model="searchQuery" type="search" :placeholder="searchPlaceholder" aria-label="搜索当前目录下的文档">
+        <button class="btn" type="submit" :disabled="searchBusy">{{ searchBusy ? '搜索中…' : '搜索' }}</button>
+      </form>
       <span class="status" :class="backendOk ? 'ok' : 'bad'">{{ backendOk ? '后端已连接' : '后端未连接' }}</span>
       <button class="btn" v-if="currentPath || activeDirPath" @click="goBack">← 返回</button>
       <button class="btn" @click="refreshTree">刷新</button>
+      <button class="btn" @click="openImport" title="从系统文件夹选择 .md 文件或整个文件夹导入">导入</button>
       <button class="btn" @click="openTrash" title="删除的文档与目录会先移入回收站，可还原">回收站<span class="trash-badge" v-if="trashCount">{{ trashCount }}</span></button>
       <button class="btn" :disabled="!currentPath" @click="openHistory" title="查看当前文档的保存历史并还原旧版本">历史</button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
@@ -333,6 +338,70 @@
       <div class="dialog-actions">
         <button class="btn" @click="showRestoreLocation = false">取消</button>
         <button class="btn primary" :disabled="!restoreOptions.length || trashBusy" @click="submitRestoreLocation">还原</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showImport" @click.self="showImport = false">
+    <div class="dialog import-dialog">
+      <h3>从系统文件夹导入 Markdown</h3>
+      <p>在浏览器里选择本机文件或整个文件夹，内容会写入当前项目的 <code>data/</code> 目录。</p>
+      <div class="import-target">
+        <label>目标目录
+          <select v-model="importTarget">
+            <option v-for="option in allDirs" :key="option.path" :value="option.path">{{ option.path }}</option>
+          </select>
+        </label>
+        <span class="import-hint">当前目录：{{ searchScopeLabel }}</span>
+      </div>
+      <div class="import-picker">
+        <button type="button" class="btn" @click="pickImportFiles">选择 .md 文件…</button>
+        <button type="button" class="btn" @click="pickImportFolder">选择整个文件夹…</button>
+      </div>
+      <input ref="importFileInput" type="file" multiple accept=".md,.markdown,text/markdown" class="hidden-input" @change="onImportPicked">
+      <input ref="importDirInput" type="file" webkitdirectory directory multiple class="hidden-input" @change="onImportPicked">
+      <div class="import-summary">
+        <strong>已选 {{ importFiles.length }} 个 .md 文件 · {{ importKilobytes }} KB</strong>
+        <span v-if="importIgnored">（自动跳过 {{ importIgnored }} 个非 .md 文件）</span>
+        <ul v-if="importFiles.length">
+          <li v-for="file in importPreview" :key="file.path">{{ file.path }}</li>
+        </ul>
+        <div class="trash-empty" v-else>还没有选择文件。选择文件夹时会保留子目录结构。</div>
+      </div>
+      <label class="import-overwrite"><input type="checkbox" v-model="importOverwrite"> 覆盖同名文档（不勾选则跳过）</label>
+      <div class="import-result" v-if="importResult">
+        <strong>成功 {{ importResult.count }} · 跳过 {{ importResult.skipped_count }} · 失败 {{ importResult.error_count }}</strong>
+        <div class="import-error" v-for="(error, index) in importResult.errors" :key="index">{{ error.source }}：{{ error.error }}</div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showImport = false">关闭</button>
+        <button class="btn primary" :disabled="!importFiles.length || !importTarget || importBusy" @click="submitImport">{{ importBusy ? '导入中…' : '开始导入' }}</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-mask" v-if="showSearch" @click.self="showSearch = false">
+    <div class="dialog search-dialog">
+      <h3>搜索结果 <span class="trash-count">{{ searchResult.count }} 个文件</span></h3>
+      <p>范围：<code>{{ searchScopeLabel }}</code> · 关键词 <code>{{ searchResult.query }}</code> · 递归扫描 {{ searchResult.scanned }} 篇文档</p>
+      <div class="search-list">
+        <div class="search-item" v-for="item in searchResult.results" :key="item.path">
+          <button type="button" class="search-file" @click="openSearchResult(item)">
+            <strong>{{ item.name }}</strong>
+            <span>{{ item.dir || '文档库顶层' }}</span>
+          </button>
+          <div class="search-matches">
+            <div class="search-match" v-for="(match, index) in item.matches" :key="index">
+              <span class="match-kind">{{ match.kind === 'name' ? '文件名' : 'L' + match.line }}</span>
+              <span class="match-text"><span v-for="(part, partIndex) in highlightParts(match.text)" :key="partIndex"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></span></span>
+            </div>
+          </div>
+        </div>
+        <div class="trash-empty" v-if="!searchResult.results || !searchResult.results.length">没有匹配的文档。</div>
+        <div class="search-truncated" v-if="searchResult.truncated">结果已达上限，请缩小关键词或搜索范围。</div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" @click="showSearch = false">关闭</button>
       </div>
     </div>
   </div>
