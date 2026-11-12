@@ -139,7 +139,7 @@
 - `GET /api/diff` 行级差异 + 历史面板差异视图；回收站还原到指定目录并迁移历史；FastAPI 版本 1.6.0。
 - 四套验证全绿：`tests/smoke_test.py` **135/135**、`tests/frontend_smoke_test.py` **74/74**、`tests/browser_smoke_test.py` **33/33**、`tests/stage5_smoke_test.py` **74/74**。
 
-### 阶段十三 · 本地导入与搜索（`stage-13-import-search`）
+### 阶段十三 · 本地导入与搜索（`stage-13-import-search`，提交 `9d3153f`）
 - `POST /api/import` 批量导入本机文件 / 文件夹（含子目录、同名跳过或覆盖、逐条安全校验）；`GET /api/search` 递归搜索当前目录并输出文件、位置与命中行；FastAPI 版本 1.7.0。
 - 四套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**。
 
