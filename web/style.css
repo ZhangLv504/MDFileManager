@@ -203,6 +203,13 @@ body {
   background: var(--accent-soft); color: var(--accent);
   font-size: 11px; line-height: 17px; text-align: center;
 }
+.toc-head-right { display: inline-flex; align-items: center; gap: 2px; }
+.toc-tool {
+  width: 24px; height: 24px; flex: none; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted);
+  font-size: 14px; line-height: 1; cursor: pointer;
+}
+.toc-tool:hover { background: var(--accent-soft); color: var(--accent); }
 .toc-close {
   width: 24px; height: 24px; flex: none; border: 0; border-radius: 6px;
   background: transparent; color: var(--muted);
@@ -222,6 +229,16 @@ body {
   background: var(--accent-soft); color: var(--accent);
   border-left-color: var(--accent); font-weight: 500;
 }
+/* 折叠箭头：有子标题时可点，旋转 90° 表示已展开 */
+.toc-caret {
+  width: 16px; height: 18px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #6b7280; cursor: pointer;
+  transition: transform .15s ease, color .15s ease;
+}
+.toc-caret.open { transform: rotate(90deg); color: var(--accent); }
+.toc-caret.leaf { visibility: hidden; cursor: default; }
+.toc-caret:hover { color: var(--accent); }
 .toc-text {
   flex: 1; min-width: 0; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;

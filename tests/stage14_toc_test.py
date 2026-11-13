@@ -172,15 +172,23 @@ def main() -> int:
     check("目录条目支持点击跳转与层级缩进",
           "scrollToHeading(item.id)" in index_html and "'depth-' + item.depth" in index_html)
     check("顶栏提供目录显示开关", "toggleToc" in index_html)
+    check("目录条目带折叠箭头与全部折叠开关",
+          "toc-caret" in index_html and "toggleHeading(item.id)" in index_html
+          and "collapseAll" in index_html and "expandAll" in index_html)
     check("前端实现标题 id 注入与目录抽取",
           "function buildOutline" in app_js and "slugifyHeading" in app_js
           and "MAX_OUTLINE_ITEMS" in app_js)
+    check("目录按标题层级建立父子关系",
+          "parentId" in app_js and "hasChildren" in app_js)
+    check("折叠逻辑按可见性过滤目录条目",
+          "visibleOutline" in app_js and "collapsedHeadings" in app_js
+          and "resolveVisibleHeading" in app_js)
     check("目录默认展开且记忆用户选择",
           "readTocVisible" in app_js and "mdfm:toc-visible" in app_js
           and "return saved === null ? true" in app_js)
     check("样式定义目录面板与高亮态",
           ".doc-toc" in style_css and ".toc-item.active" in style_css
-          and "depth-2" in style_css)
+          and "depth-2" in style_css and ".toc-caret.open" in style_css)
 
     browser = find_browser()
     if browser is None:
@@ -228,6 +236,15 @@ def main() -> int:
         check("目录条目呈现三级缩进层级",
               "depth-0" in aside and "depth-1" in aside and "depth-2" in aside,
               aside[:220])
+        # 6 个标题里 h1、两个 h2 有子标题，共 3 个可折叠节点
+        check("每个条目都有折叠箭头占位，仅父级可点",
+              aside.count('class="toc-caret') == 6
+              and aside.count("toc-caret leaf") == 3
+              and aside.count("toc-caret open") == 3,
+              f"-> caret={aside.count('class=\"toc-caret')} leaf={aside.count('toc-caret leaf')}")
+        check("目录头部提供折叠全部/展开全部按钮",
+              'class="toc-tool"' in aside and "折叠全部标题" in aside,
+              aside[:200])
         check("目录条目文本与标题文本一致",
               "阶段十四目录验证" in aside and "小节 1.1" in aside and "深层小节 2.1.1" in aside)
         check("目录默认展开（无 tbody 兜底文案）", "还没有标题" not in aside)

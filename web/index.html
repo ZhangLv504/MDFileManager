@@ -165,12 +165,18 @@
       <aside class="doc-toc" v-if="showToc">
         <div class="toc-head">
           <span class="toc-title">目录<span class="toc-count" v-if="docOutline.length">{{ docOutline.length }}</span></span>
-          <button type="button" class="toc-close" title="隐藏目录" @click="toggleToc">×</button>
+          <span class="toc-head-right">
+            <button type="button" class="toc-tool" v-if="collapsibleCount"
+              :title="allCollapsed ? '展开全部标题' : '折叠全部标题'" @click="allCollapsed ? expandAll() : collapseAll()">{{ allCollapsed ? '+' : '−' }}</button>
+            <button type="button" class="toc-close" title="隐藏目录" @click="toggleToc">×</button>
+          </span>
         </div>
         <nav class="toc-list" ref="tocList">
-          <button type="button" v-for="item in docOutline" :key="item.id"
+          <button type="button" v-for="item in visibleOutline" :key="item.id"
             class="toc-item" :class="['depth-' + item.depth, { active: activeHeading === item.id }]"
             :title="item.text" @click="scrollToHeading(item.id)">
+            <span class="toc-caret" :class="{ open: item.hasChildren && !isCollapsed(item.id), leaf: !item.hasChildren }"
+              @click.stop="item.hasChildren && toggleHeading(item.id)">▸</span>
             <span class="toc-text">{{ item.text }}</span>
           </button>
           <div class="toc-empty" v-if="!docOutline.length">

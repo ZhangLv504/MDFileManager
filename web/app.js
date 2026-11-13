@@ -44,13 +44,15 @@
 
   /* 给渲染后的每个标题补上稳定 id，并抽取目录条目。
    * marked v12 起不再生成 heading id，这里统一补，保证目录跳转与高亮可用。
-   * 返回 { html, headings: [{ id, level, depth, text }] }。 */
+   * 同时按标题层级算出 parentId / hasChildren，供目录逐级折叠。
+   * 返回 { html, headings: [{ id, level, depth, text, parentId, hasChildren }] }。 */
   function buildOutline(html) {
     var holder = document.createElement('div');
     holder.innerHTML = html || '';
     var nodes = holder.querySelectorAll('h1, h2, h3, h4, h5, h6');
     var used = Object.create(null);
     var headings = [];
+    var stack = [];
     Array.prototype.forEach.call(nodes, function (node) {
       if (headings.length >= MAX_OUTLINE_ITEMS) return;
       var text = (node.textContent || '').replace(/\s+/g, ' ').trim();
@@ -61,9 +63,22 @@
       while (used[id]) { id = base + '-' + seq; seq += 1; }
       used[id] = true;
       node.setAttribute('id', id);
-      headings.push({ id: id, level: Number(node.tagName.charAt(1)), depth: 0, text: text });
+      var level = Number(node.tagName.charAt(1));
+      // 维护标题栈：弹出层级 >= 当前标题的节点，栈顶就是父标题。
+      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+      var parentId = stack.length ? stack[stack.length - 1].id : '';
+      stack.push({ level: level, id: id });
+      headings.push({
+        id: id, level: level, depth: 0, text: text,
+        parentId: parentId, hasChildren: false
+      });
     });
     if (headings.length) {
+      var byId = Object.create(null);
+      headings.forEach(function (item) { byId[item.id] = item; });
+      headings.forEach(function (item) {
+        if (item.parentId && byId[item.parentId]) byId[item.parentId].hasChildren = true;
+      });
       var minLevel = headings.reduce(function (low, item) {
         return item.level < low ? item.level : low;
       }, 6);
@@ -178,6 +193,8 @@
         // 左侧文档目录：默认展开，用户收起后的选择记在 localStorage。
         showToc: readTocVisible(),
         activeHeading: '',
+        // 被折叠的标题 id 集合：默认全部展开，只记录用户主动折叠的节点。
+        collapsedHeadings: {},
         tocScrollTick: false,
         backendOk: false,
         notice: null,
@@ -237,6 +254,40 @@
       renderedDoc: function () { return buildOutline(renderMarkdown(this.content)); },
       renderedHtml: function () { return this.renderedDoc.html; },
       docOutline: function () { return this.renderedDoc.headings; },
+      // 折叠后实际可见的目录条目：父级折叠时整棵子树都跳过。
+      visibleOutline: function () {
+        var collapsed = this.collapsedHeadings;
+        var hidden = Object.create(null);
+        var visible = [];
+        this.docOutline.forEach(function (item) {
+          if (item.parentId && hidden[item.parentId]) {
+            hidden[item.id] = true;
+            return;
+          }
+          visible.push(item);
+          if (collapsed[item.id]) hidden[item.id] = true;
+        });
+        return visible;
+      },
+      visibleHeadingIds: function () {
+        var ids = Object.create(null);
+        this.visibleOutline.forEach(function (item) { ids[item.id] = true; });
+        return ids;
+      },
+      headingById: function () {
+        var map = Object.create(null);
+        this.docOutline.forEach(function (item) { map[item.id] = item; });
+        return map;
+      },
+      // 可折叠（有子标题）的条目数量，为 0 时隐藏「全部折叠/展开」按钮。
+      collapsibleCount: function () {
+        return this.docOutline.filter(function (item) { return item.hasChildren; }).length;
+      },
+      allCollapsed: function () {
+        var list = this.docOutline.filter(function (item) { return item.hasChildren; });
+        if (!list.length) return false;
+        return list.every(function (item) { return !!this.collapsedHeadings[item.id]; }, this);
+      },
       dirty: function () { return this.content !== this.original; },
       docCount: function () { return countFiles(this.tree); },
       topCards: function () {
@@ -1133,6 +1184,33 @@
         if (window.innerWidth <= 900) this.showToc = false;
       },
 
+      isCollapsed: function (headingId) {
+        return !!this.collapsedHeadings[headingId];
+      },
+
+      // 折叠 / 展开单个标题下的子目录；整体替换对象以触发视图更新。
+      toggleHeading: function (headingId) {
+        var next = Object.assign({}, this.collapsedHeadings);
+        if (next[headingId]) delete next[headingId];
+        else next[headingId] = true;
+        this.collapsedHeadings = next;
+        // 高亮项可能刚好被折叠隐藏，重算到最近可见的祖先标题。
+        this.refreshActiveHeading();
+      },
+
+      collapseAll: function () {
+        var next = {};
+        this.docOutline.forEach(function (item) {
+          if (item.hasChildren) next[item.id] = true;
+        });
+        this.collapsedHeadings = next;
+        this.refreshActiveHeading();
+      },
+
+      expandAll: function () {
+        this.collapsedHeadings = {};
+      },
+
       scrollToHeading: function (headingId) {
         var container = this.$refs.viewerScroll;
         if (!container) return;
@@ -1169,7 +1247,20 @@
           if (node.getBoundingClientRect().top <= threshold) current = this.docOutline[i].id;
           else break;
         }
+        current = this.resolveVisibleHeading(current);
         if (this.activeHeading !== current) this.activeHeading = current;
+      },
+
+      // 当前标题被父级折叠隐藏时，向上找到最近一个可见的祖先标题来高亮。
+      resolveVisibleHeading: function (headingId) {
+        var visible = this.visibleHeadingIds;
+        var map = this.headingById;
+        var current = headingId;
+        while (current) {
+          if (visible[current]) return current;
+          current = map[current] ? map[current].parentId : '';
+        }
+        return '';
       },
 
       // 滚动正文时同步目录高亮，用 rAF 节流避免高频 layout 查询。
@@ -1194,6 +1285,7 @@
           this.original = data.content;
           this.editing = false;
           this.activeHeading = '';
+          this.collapsedHeadings = {};
           var self = this;
           Vue.nextTick(function () {
             var container = self.$refs.viewerScroll;
