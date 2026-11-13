@@ -750,6 +750,24 @@
         }
       },
 
+      // 把后端返回的 ISO 时间（UTC）转成本地「YYYY-MM-DD HH:MM」
+      formatStamp: function (value) {
+        if (!value) return '—';
+        var date = new Date(value);
+        if (isNaN(date.getTime())) return String(value);
+        var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+          + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+      },
+
+      formatSize: function (bytes) {
+        var size = Number(bytes);
+        if (!isFinite(size) || size <= 0) return '0 B';
+        if (size < 1024) return size + ' B';
+        if (size < 1024 * 1024) return (Math.round(size / 1024 * 10) / 10) + ' KB';
+        return (Math.round(size / 1024 / 1024 * 10) / 10) + ' MB';
+      },
+
       highlightParts: function (text) {
         var value = String(text || '');
         var needle = String(this.searchResult.query || this.searchQuery || '').toLowerCase();

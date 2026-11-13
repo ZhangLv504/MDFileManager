@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十五均已完成并通过验证；十五个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`、`stage-14-doc-toc`、`stage-15-drag-import`。
+> 状态：阶段一～十六均已完成并通过验证；十六个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`、`stage-14-doc-toc`、`stage-15-drag-import`、`stage-16-layout-polish`。
 
 ## 核心需求与阶段划分
 
@@ -112,6 +112,17 @@
   - 默认只新增不覆盖，**按住 Shift 或 Alt 拖入才覆盖同名文档**；导入完成后提示成功 / 跳过 / 失败 / 忽略数量并刷新目录树。
 - **输出**：纯前端改动（`web/index.html`、`web/app.js`、`web/style.css`），后端零改动，无新增第三方库；新增 `tests/stage15_drag_import_test.py`（通过 Chrome DevTools Protocol 真实派发拖放事件）。
 
+### 阶段十六：界面布局优化
+- **目标**：用户要求「优化界面布局」——解决顶栏拥挤、长文行宽过宽、卡片末行被拉满、目录页信息平铺、对话框尺寸固定等实际问题。
+- **机制**：
+  - **顶栏压缩**：高度 66 → 56px，按钮 32 → 30px、内边距与字号同步收紧，搜索框 190 → 168px，状态标签缩小；13 个操作按「导航 / 内容 / 编辑」三组用 `.group-sep` 竖线分隔；`≤1200px` 先隐藏品牌副标题与「当前位置」标签、收窄搜索框，`≤760px` 再隐藏品牌文字，避免换行时挤压路径。
+  - **阅读区**：`.markdown-body` 由 `max-width: none` 改为 `920px` 并 `margin: 0 auto`，1440px 下行宽约 900px，长文更易读；目录面板仍固定 250px。
+  - **卡片库**：`.cards` 由 flex 换行改为 `grid-template-columns: repeat(auto-fill, minmax(278px, 1fr))`，卡片等高、末行不再被拉满；卡片改纵向 flex，说明最多 3 行截断、底部入口贴底；新增无目录时的空状态引导块。
+  - **目录页**：头部信息（面包屑 / 标题 / 说明 / 统计）收进带边框与圆角的白色卡片，与内容区分离；`.tiles` 同样改为自适应网格，文档大小由 `B` 改为按 `B/KB/MB` 显示。
+  - **对话框**：`.dialog` 统一 `max-height: 88vh` + 纵向 flex + 阴影，操作区固定在底部；回收站列表与历史面板列表改为独立滚动；历史面板定为 800×640，`≤900px` 自适应为 `92vw`。
+  - **时间可读性**：新增 `formatStamp()` 把后端 ISO/UTC 时间转成本地 `YYYY-MM-DD HH:MM`，回收站删除时间与历史版本时间统一使用；新增 `formatSize()` 处理 B/KB/MB。
+- **输出**：纯前端改动（`web/index.html`、`web/app.js`、`web/style.css`），后端零改动，无新增第三方库；新增 `tests/stage16_layout_test.py`（CDP 读取真实计算样式与几何尺寸）。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -173,6 +184,10 @@
 - 从资源管理器把 `.md` 文件或整个文件夹拖到目录卡片、子文件夹、面包屑或目录页空白处即可导入，支持保留子目录、同名跳过与 Shift 覆盖、拖动中的提示条与目标高亮；后端零改动，FastAPI 版本仍为 1.7.0。
 - 六套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**、`tests/stage14_toc_test.py` **33/33**、`tests/stage15_drag_import_test.py` **27/27**。
 
+### 阶段十六 · 界面布局优化（`stage-16-layout-polish`）
+- 顶栏压缩并分组、阅读正文限宽居中、卡片库与目录页改自适应网格、目录页头部卡片化、对话框限高可滚动、时间与大小改为本地可读格式、窄屏单列适配；后端零改动。
+- 七套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**、`tests/stage14_toc_test.py` **33/33**、`tests/stage15_drag_import_test.py` **27/27**、`tests/stage16_layout_test.py` **36/36**。
+
 ### 运行方式
 
 ```bash
@@ -190,6 +205,7 @@ py -3.12 -m venv .venv
 .venv/Scripts/python.exe tests/stage5_smoke_test.py
 .venv/Scripts/python.exe tests/stage14_toc_test.py
 .venv/Scripts/python.exe tests/stage15_drag_import_test.py
+.venv/Scripts/python.exe tests/stage16_layout_test.py
 ```
 
 ## 当前能力边界
@@ -202,5 +218,6 @@ py -3.12 -m venv .venv
 - 拖放导入与「导入」对话框共用后端 `POST /api/import`：拖入的是浏览器读取的文件内容，服务端同样不接触真实路径；只接受 `.md`（文件夹会递归读取并保留子目录），默认跳过同名、按住 Shift / Alt 才覆盖，单次上限 200 个文件。依赖浏览器的 `webkitGetAsEntry` 递归目录，不支持的浏览器退化为平铺读文件；从页面外部拖入时浏览器须允许读取该文件。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。阅读视图左侧默认显示当前文档的标题目录，可收起（偏好存于浏览器本地），编辑视图（源码 + 实时预览）不显示目录。
 - 目录只收 `#` 标题，最深支持 4 级缩进、最多 300 条，父级条目可逐级折叠或一键折叠/展开；标题里含公式时目录显示原始 Markdown 文本；文档没有标题时给出提示而不隐藏面板。
+- 界面为桌面优先：顶栏 13 个操作按「导航 / 内容 / 编辑」三组排列，`≤1200px` 收起次要文字、`≤760px` 卡片单列并把目录（`≤900px`）改为浮层；阅读正文最大 920px 居中，卡片与目录条目为自适应网格。移动端只做了窄屏适配，未做手势与抽屉式导航。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限与移动端适配；文档版本历史已在阶段十一补齐（同名覆盖即生成一个新版本）。

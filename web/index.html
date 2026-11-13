@@ -29,12 +29,15 @@
         <button class="btn" type="submit" :disabled="searchBusy">{{ searchBusy ? '搜索中…' : '搜索' }}</button>
       </form>
       <span class="status" :class="backendOk ? 'ok' : 'bad'">{{ backendOk ? '后端已连接' : '后端未连接' }}</span>
+      <span class="group-sep"></span>
       <button class="btn" v-if="currentPath || activeDirPath" @click="goBack">← 返回</button>
       <button class="btn" @click="refreshTree">刷新</button>
+      <span class="group-sep"></span>
       <button class="btn" @click="openImport" title="从系统文件夹选择 .md 文件或整个文件夹导入">导入</button>
       <button class="btn" @click="openTrash" title="删除的文档与目录会先移入回收站，可还原">回收站<span class="trash-badge" v-if="trashCount">{{ trashCount }}</span></button>
       <button class="btn" :disabled="!currentPath" @click="openHistory" title="查看当前文档的保存历史并还原旧版本">历史</button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
+      <span class="group-sep"></span>
       <button class="btn" :class="{ active: showToc && !editing }" :disabled="!currentPath || editing" @click="toggleToc" title="显示或隐藏左侧文档目录（大纲）">目录</button>
       <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
       <button class="btn primary" :disabled="!currentPath || saving" @click="saveDoc">{{ saving ? '保存中…' : '保存' }}<kbd>Ctrl+S</kbd></button>
@@ -79,6 +82,10 @@
           <p class="card-desc" :class="{ empty: !card.description }">{{ card.description || '暂无说明，点击「编辑说明」补充这个分类的用途。' }}</p>
           <div class="card-foot">双击进入目录 →</div>
         </section>
+      </div>
+      <div class="cards-empty" v-if="!topCards.length">
+        <strong>还没有任何目录</strong>
+        <p>点顶栏「新建」创建第一个分类目录，或把电脑里的 .md 文件直接拖到这里导入。</p>
       </div>
       <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里；也可以直接把电脑里的 .md 文件或文件夹拖到卡片上导入。删除先入回收站，可在顶栏还原。</div>
     </div>
@@ -143,7 +150,7 @@
             @click="selectDoc(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
             <span class="tile-icon">·</span>
             <span class="tile-name" :title="item.path">{{ item.name }}</span>
-            <span class="tile-meta">{{ item.size }} B</span>
+            <span class="tile-meta">{{ formatSize(item.size) }}</span>
           </div>
         </div>
       </section>
@@ -287,7 +294,7 @@
           <div class="trash-info">
             <strong>{{ item.name }}</strong>
             <span class="trash-path" :title="item.original_path">{{ item.original_path }}</span>
-            <small>{{ item.type === 'dir' ? '目录' : '文档' }} · {{ item.deleted_at }} · {{ item.removed_docs }} 篇文档 · {{ item.size }} B</small>
+            <small>{{ item.type === 'dir' ? '目录' : '文档' }} · {{ formatStamp(item.deleted_at) }} · {{ item.removed_docs }} 篇文档 · {{ formatSize(item.size) }}</small>
           </div>
           <div class="trash-actions">
             <button type="button" class="btn" @click="restoreTrash(item.id)">还原</button>
@@ -313,7 +320,7 @@
           <button type="button" v-for="item in historyVersions" :key="item.id"
             :class="{ active: selectedVersion === item.id }" @click="previewVersion(item.id)">
             <strong>v{{ item.version }}<span v-if="item.version === latestVersionNumber"> · 最新</span></strong>
-            <small>{{ item.created_at }} · {{ item.size }} B · {{ versionLabel(item.action) }}</small>
+            <small>{{ formatStamp(item.created_at) }} · {{ formatSize(item.size) }} · {{ versionLabel(item.action) }}</small>
           </button>
           <div class="trash-empty" v-if="!historyVersions.length">这篇文档还没有历史版本。</div>
         </div>

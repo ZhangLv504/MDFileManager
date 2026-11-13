@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Python | **3.12.7** | 项目指定版本，本机通过 `py -3.12` 选择（`E:\Software\Python3127\python.exe`） |
 | Node.js | v22.22.2（可选） | **仅**用于开发期的 `node --check` 语法校验、marked / KaTeX 渲染探针，以及 `npm pack` 下载 KaTeX；项目运行不需要 |
-| Chrome / Edge | 系统自带（可选） | **仅**用于 `tests/browser_smoke_test.py`、`tests/stage5_smoke_test.py`、`tests/stage14_toc_test.py`、`tests/stage15_drag_import_test.py` 的真实无头浏览器验证；不下载浏览器，项目运行不需要 |
+| Chrome / Edge | 系统自带（可选） | **仅**用于 `tests/browser_smoke_test.py`、`tests/stage5_smoke_test.py`、`tests/stage14_toc_test.py`、`tests/stage15_drag_import_test.py`、`tests/stage16_layout_test.py` 的真实无头浏览器验证；不下载浏览器，项目运行不需要 |
 | 浏览器 | 现代浏览器 | 访问前端页面，无需构建工具、无需联网 |
 | 操作系统 | Windows | 命令示例为 Git Bash 风格 |
 
@@ -232,9 +232,10 @@ py -3.12 -m venv .venv
 .venv/Scripts/python.exe tests/stage5_smoke_test.py    # 重命名/说明/删除/移动/回收站/历史/导入/搜索/卡片：81/81
 .venv/Scripts/python.exe tests/stage14_toc_test.py      # 左侧目录大纲与层级折叠：33/33
 .venv/Scripts/python.exe tests/stage15_drag_import_test.py  # 系统拖入 .md 的真实拖放导入：27/27
+.venv/Scripts/python.exe tests/stage16_layout_test.py     # 界面布局与计算样式（网格/行宽/响应式）：36/36
 ```
 
-六个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。`tests/trash_cleanup.py` 只清理带测试标记的回收站条目与版本历史，不会碰用户真实数据；`smoke_test.py` 还通过 `MDFM_TRASH_DIR` / `MDFM_HISTORY_DIR` 把回收站与历史指向临时目录，专门验证跨盘移动与「清空」类操作。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四、五个脚本调用系统自带的无头 Chrome / Edge 的 `--dump-dom` 验证真实 DOM，不下载浏览器；第六个脚本在 `--dump-dom` 之外还通过 Chrome DevTools Protocol（依赖 `uvicorn[standard]` 已装的 `websockets`）真实派发 `dragenter / dragover / drop`，验证拖放导入确实落盘。
+七个脚本都会自行拉起一个临时端口的 uvicorn、跑完全部用例后关闭并清理测试文档与目录，**不需要先手动启动服务**。`tests/trash_cleanup.py` 只清理带测试标记的回收站条目与版本历史，不会碰用户真实数据；`smoke_test.py` 还通过 `MDFM_TRASH_DIR` / `MDFM_HISTORY_DIR` 把回收站与历史指向临时目录，专门验证跨盘移动与「清空」类操作。若装有 Node.js，第二个脚本会额外做 JS 语法检查、marked 渲染探针与公式扩展探针；第三、四、五个脚本调用系统自带的无头 Chrome / Edge 的 `--dump-dom` 验证真实 DOM，不下载浏览器；第六、七个脚本还通过 Chrome DevTools Protocol（依赖 `uvicorn[standard]` 已装的 `websockets`）真实派发 `dragenter / dragover / drop` 与读取计算样式，分别验证拖放导入确实落盘、界面网格/行宽/响应式符合预期。
 
 ### 4.4 关键目录
 
@@ -254,7 +255,7 @@ MDFileManager/
 │   ├── math.js             # marked 公式扩展 + KaTeX 填充
 │   ├── style.css
 │   └── vendor/             # 已本地化的前端库（含 katex/fonts/*.woff2）
-├── tests/                  # 六个可运行验证脚本 + trash_cleanup.py（回收站/历史测试清理工具）
+├── tests/                  # 七个可运行验证脚本 + trash_cleanup.py（回收站/历史测试清理工具）
 └── Doc/                    # 需求、协作约定、进度、新会话指令与本指南
 ```
 
@@ -300,6 +301,7 @@ MDFileManager/
 | 阶段十三 · 本地导入与搜索 | 无新增第三方库（浏览器 File API、标准库） | `POST /api/import` 批量导入本机文件/文件夹（含子目录、覆盖开关）；`GET /api/search` 递归搜索当前目录并输出文件与位置、命中行；`tests/stage5_smoke_test.py` 81/81 |
 | 阶段十四 · 左侧文档目录 | 无新增第三方库（marked 渲染 + 原生 DOM 解析） | 阅读视图左侧标题目录、层级折叠、点击跳转与滚动高亮；`tests/stage14_toc_test.py` 33/33 |
 | 阶段十五 · 系统拖放导入 | 无新增第三方库（HTML5 Drag & Drop、File API、webkitGetAsEntry） | 从资源管理器把 .md 文件或整个文件夹拖到卡片/文件夹/目录页即可导入；`tests/stage15_drag_import_test.py` 27/27 |
+| 阶段十六 · 界面布局优化 | 无新增第三方库 | 顶栏分组压缩、正文限宽居中、卡片网格化、对话框限高、时间与大小本地化格式；`tests/stage16_layout_test.py` 36/36 |
 | 开发期校验（可选） | Node.js 22、npm 10 | `node --check`、marked / KaTeX 渲染探针、`npm pack` 下载 KaTeX |
 
 ## 六、当前能力边界
