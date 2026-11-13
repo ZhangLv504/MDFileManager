@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十四均已完成并通过验证；十四个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`、`stage-14-doc-toc`。
+> 状态：阶段一～十五均已完成并通过验证；十五个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`、`stage-14-doc-toc`、`stage-15-drag-import`。
 
 ## 核心需求与阶段划分
 
@@ -101,6 +101,17 @@
   - 窄屏（≤900px）目录自动变为带半透明遮罩的浮层，点遮罩、`×` 或任一目录条目即收起，避免挤压正文；目录条目最多收录 300 条，防止超长文档拖慢渲染。
 - **输出**：纯前端改动（`web/index.html`、`web/app.js`、`web/style.css`），后端零改动，无新增第三方库；新增 `tests/stage14_toc_test.py`。
 
+### 阶段十五：从系统资源管理器直接拖入 md
+- **目标**：用户要求「增加直接从电脑中拖动 md 文件到目录下的功能」——不用点「导入」按钮，把文件从资源管理器拖到目标位置即可落盘。
+- **机制**：
+  - 用 `dataTransfer.types` 是否含 `Files` 区分「系统文件拖拽」与页面内部拖拽（内部拖拽只有 `text/plain`），两套逻辑共用同一批 `dragover` / `drop` 绑定，互不干扰；`window` 上统一拦截 `dragover` / `drop` 并阻止默认行为，避免浏览器直接把 .md 当页面打开。
+  - 可放置目标：顶层目录卡片、目录页的子文件夹与文档条目、面包屑（含「文档库」顶层）、「移动到上级」区域，以及 `main` 空白处（默认取当前目录 / 当前文档所在目录 / `data/` 顶层）。
+  - 拖入内容用 `webkitGetAsEntry()` 递归读取，**支持直接拖整个文件夹并保留子目录结构**（`readEntries` 分批循环）；浏览器不支持时退回 `dataTransfer.files` 平铺读取。只收 `.md`，其他文件计入「忽略」并提示。
+  - 读到的文本复用阶段十三的 `POST /api/import`（`target_dir` + `files` + `overwrite`）提交，因此路径校验、同名策略、200 文件 / 20 MB 上限、版本快照与「自动建子目录」等能力全部继承。
+  - 交互反馈：拖动文件进入页面即出现底部蓝色提示条（显示目标目录与「按住 Shift 覆盖同名」）、主区域蓝色虚线框、目标卡片/文件夹高亮；`drop` 后提示条自动消失。
+  - 默认只新增不覆盖，**按住 Shift 或 Alt 拖入才覆盖同名文档**；导入完成后提示成功 / 跳过 / 失败 / 忽略数量并刷新目录树。
+- **输出**：纯前端改动（`web/index.html`、`web/app.js`、`web/style.css`），后端零改动，无新增第三方库；新增 `tests/stage15_drag_import_test.py`（通过 Chrome DevTools Protocol 真实派发拖放事件）。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -158,6 +169,10 @@
 - 标题自动注入稳定 id，阅读视图左侧默认展示目录大纲（层级缩进、点击跳转、滚动高亮、可收起并记忆），目录按标题层级支持逐级折叠与一键折叠/展开，窄屏转为浮层；后端零改动，FastAPI 版本仍为 1.7.0。
 - 五套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**、`tests/stage14_toc_test.py` **33/33**。
 
+### 阶段十五 · 系统拖放导入（`stage-15-drag-import`）
+- 从资源管理器把 `.md` 文件或整个文件夹拖到目录卡片、子文件夹、面包屑或目录页空白处即可导入，支持保留子目录、同名跳过与 Shift 覆盖、拖动中的提示条与目标高亮；后端零改动，FastAPI 版本仍为 1.7.0。
+- 六套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**、`tests/stage14_toc_test.py` **33/33**、`tests/stage15_drag_import_test.py` **27/27**。
+
 ### 运行方式
 
 ```bash
@@ -174,6 +189,7 @@ py -3.12 -m venv .venv
 .venv/Scripts/python.exe tests/browser_smoke_test.py
 .venv/Scripts/python.exe tests/stage5_smoke_test.py
 .venv/Scripts/python.exe tests/stage14_toc_test.py
+.venv/Scripts/python.exe tests/stage15_drag_import_test.py
 ```
 
 ## 当前能力边界
@@ -183,6 +199,7 @@ py -3.12 -m venv .venv
 - 删除先进回收站，可还原到原位置或指定目录；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；目标同名返回 409。
 - 版本历史按文档路径归档，重命名 / 移动 / 从回收站定向还原都会迁移；整目录递归删除后若不走回收站还原，其下文档的旧历史仅保留旧路径记录。差异为 `difflib` 逐行对比，单侧上限 3000 行；每篇最多 50 版，全局 500 篇 / 50 MB。
 - 导入只接受浏览器给出的相对文件名，服务端不读取任意系统路径；搜索为大小写不敏感的子串匹配，不做分词 / 正则 / 语义检索，也不索引隐藏文件。两者均有硬上限并在结果中提示截断。
+- 拖放导入与「导入」对话框共用后端 `POST /api/import`：拖入的是浏览器读取的文件内容，服务端同样不接触真实路径；只接受 `.md`（文件夹会递归读取并保留子目录），默认跳过同名、按住 Shift / Alt 才覆盖，单次上限 200 个文件。依赖浏览器的 `webkitGetAsEntry` 递归目录，不支持的浏览器退化为平铺读文件；从页面外部拖入时浏览器须允许读取该文件。
 - 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。阅读视图左侧默认显示当前文档的标题目录，可收起（偏好存于浏览器本地），编辑视图（源码 + 实时预览）不显示目录。
 - 目录只收 `#` 标题，最深支持 4 级缩进、最多 300 条，父级条目可逐级折叠或一键折叠/展开；标题里含公式时目录显示原始 Markdown 文本；文档没有标题时给出提示而不隐藏面板。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。

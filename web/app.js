@@ -163,6 +163,93 @@
     });
   }
 
+  /* 从系统资源管理器拖入时 dataTransfer.types 含 "Files"；
+   * 页面内部的卡片/文档拖拽只有 "text/plain"，据此区分两种拖放。 */
+  function isFileDrag(event) {
+    var types = event && event.dataTransfer ? event.dataTransfer.types : null;
+    if (!types) return false;
+    for (var i = 0; i < types.length; i += 1) {
+      if (types[i] === 'Files') return true;
+    }
+    return false;
+  }
+
+  function dropEntryResult() {
+    return { files: [], skipped: 0, failed: 0 };
+  }
+
+  /* 递归读取拖入的文件或整个文件夹：保留相对子目录，只收 .md。
+   * 必须在 drop 事件里同步拿到 entry，之后的读取都是异步的。 */
+  function readDroppedEntry(entry, prefix) {
+    return new Promise(function (resolve) {
+      var result = dropEntryResult();
+      if (!entry) { resolve(result); return; }
+      if (entry.isFile) {
+        var relative = prefix + entry.name;
+        if (!/\.md$/i.test(relative)) { result.skipped = 1; resolve(result); return; }
+        entry.file(function (file) {
+          readFileAsText(file).then(function (text) {
+            result.files.push({ path: relative, content: text });
+            resolve(result);
+          }, function () {
+            result.failed = 1;
+            resolve(result);
+          });
+        }, function () {
+          result.failed = 1;
+          resolve(result);
+        });
+        return;
+      }
+      if (!entry.isDirectory) { resolve(result); return; }
+      var reader = entry.createReader();
+      var children = [];
+      var readBatch = function () {
+        reader.readEntries(function (batch) {
+          if (!batch || !batch.length) {
+            Promise.all(children.map(function (child) {
+              return readDroppedEntry(child, prefix + entry.name + '/');
+            })).then(function (parts) {
+              parts.forEach(function (part) {
+                result.files = result.files.concat(part.files);
+                result.skipped += part.skipped;
+                result.failed += part.failed;
+              });
+              resolve(result);
+            }, function () { resolve(result); });
+            return;
+          }
+          children = children.concat(Array.prototype.slice.call(batch));
+          readBatch();
+        }, function () { resolve(result); });
+      };
+      readBatch();
+    });
+  }
+
+  function collectDropPayload(dataTransfer) {
+    var entries = [];
+    var files = [];
+    var items = dataTransfer.items;
+    if (items && items.length) {
+      for (var i = 0; i < items.length; i += 1) {
+        var item = items[i];
+        if (!item || item.kind !== 'file') continue;
+        var entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry) {
+          entries.push(entry);
+          continue;
+        }
+        var file = item.getAsFile ? item.getAsFile() : null;
+        if (file) files.push(file);
+      }
+    }
+    if (!entries.length && !files.length && dataTransfer.files) {
+      files = Array.prototype.slice.call(dataTransfer.files);
+    }
+    return { entries: entries, files: files };
+  }
+
   async function api(method, url, body) {
     var options = { method: method, headers: {} };
     if (body !== undefined) {
@@ -243,6 +330,11 @@
         importOverwrite: false,
         importBusy: false,
         importResult: null,
+        // 从系统资源管理器拖入 .md 的拖放状态
+        fileDragActive: false,
+        fileDropTarget: '',
+        fileDropBusy: false,
+        fileDropHandled: false,
         noticeTimer: null,
         keyHandler: null,
         hashHandler: null,
@@ -355,6 +447,19 @@
       searchScopeLabel: function () {
         return this.searchScope ? this.searchScope + '（含子目录）' : '整个文档库';
       },
+      // 拖入但未指向具体条目时的默认导入位置：目录页取当前目录，
+      // 文档页取该文档所在目录，卡片库取 data/ 顶层。
+      defaultImportDir: function () {
+        if (this.activeDirPath) return this.activeDirPath;
+        if (this.currentPath) {
+          var index = this.currentPath.lastIndexOf('/');
+          return index > 0 ? this.currentPath.slice(0, index) : '';
+        }
+        return '';
+      },
+      fileDropLabel: function () {
+        return this.fileDropTarget || this.defaultImportDir || 'data/ 顶层';
+      },
       searchPlaceholder: function () {
         return '搜索 ' + (this.searchScope || '整个文档库') + ' 下的文档…';
       },
@@ -455,8 +560,34 @@
       };
       this.hashHandler = function () { self.openFromHash(); };
       this.docClickHandler = function () { self.closeContextMenu(); };
+      // 从系统拖入文件：接管默认行为（否则浏览器会直接打开文件），
+      // 拖到可放置区以外时提示用户。内部拖拽只有 text/plain，不受影响。
+      this.dragOverHandler = function (event) {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        self.fileDragActive = true;
+      };
+      this.dragLeaveHandler = function (event) {
+        if (!isFileDrag(event)) return;
+        if (event.relatedTarget) return;
+        self.fileDragActive = false;
+        self.fileDropTarget = '';
+      };
+      this.dropHandler = function (event) {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        self.fileDragActive = false;
+        self.fileDropTarget = '';
+        if (!self.fileDropHandled) {
+          self.notify('把 .md 文件拖到目录卡片、文件夹或目录页上即可导入', 'error');
+        }
+      };
       window.addEventListener('keydown', this.keyHandler);
       window.addEventListener('hashchange', this.hashHandler);
+      window.addEventListener('dragover', this.dragOverHandler);
+      window.addEventListener('dragleave', this.dragLeaveHandler);
+      window.addEventListener('drop', this.dropHandler);
       document.addEventListener('click', this.docClickHandler);
       this.checkHealth();
       this.refreshTrashCount();
@@ -466,6 +597,9 @@
     beforeUnmount: function () {
       window.removeEventListener('keydown', this.keyHandler);
       window.removeEventListener('hashchange', this.hashHandler);
+      window.removeEventListener('dragover', this.dragOverHandler);
+      window.removeEventListener('dragleave', this.dragLeaveHandler);
+      window.removeEventListener('drop', this.dropHandler);
       document.removeEventListener('click', this.docClickHandler);
       clearTimeout(this.noticeTimer);
     },
@@ -1009,21 +1143,137 @@
       },
 
       onDragOver: function (event, targetPath) {
+        if (isFileDrag(event)) {
+          this.onFileDragOver(event, targetPath);
+          return;
+        }
         if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
         this.dropTarget = targetPath;
       },
 
       onDragLeave: function (targetPath) {
+        if (this.fileDropTarget === targetPath) this.fileDropTarget = '';
         if (this.dropTarget === targetPath) this.dropTarget = '';
       },
 
       onDrop: function (event, targetPath) {
+        if (isFileDrag(event)) {
+          event.stopPropagation();
+          this.handleFileDrop(event, targetPath);
+          return;
+        }
         var source = '';
         try { source = event.dataTransfer.getData('text/plain') || ''; } catch (error) { /* 忽略 */ }
         if (!source) source = this.draggingPath;
         this.draggingPath = '';
         this.dropTarget = '';
         if (source) this.moveEntry(source, targetPath);
+      },
+
+      /* ---------- 从系统资源管理器拖入 .md ---------- */
+
+      onFileDragOver: function (event, targetPath) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        this.fileDragActive = true;
+        this.fileDropTarget = targetPath;
+      },
+
+      // 页面空白区域兜底：拖到没有具体条目的地方就导入到当前上下文目录
+      onMainDragOver: function (event) {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        this.fileDragActive = true;
+        if (!this.fileDropTarget) this.fileDropTarget = this.defaultImportDir;
+      },
+
+      onMainDragLeave: function (event) {
+        if (!isFileDrag(event)) return;
+        var next = event.relatedTarget;
+        if (next && event.currentTarget && event.currentTarget.contains(next)) return;
+        this.fileDropTarget = '';
+      },
+
+      onMainDrop: function (event) {
+        if (!isFileDrag(event)) return;
+        // 条目级 drop handler 已经处理过，这里不重复导入
+        if (this.fileDropHandled) return;
+        this.handleFileDrop(event, this.defaultImportDir);
+      },
+
+      handleFileDrop: async function (event, targetPath) {
+        var dataTransfer = event.dataTransfer;
+        if (!dataTransfer || this.fileDropBusy) return;
+        event.preventDefault();
+        this.fileDropHandled = true;
+        this.fileDragActive = false;
+        this.fileDropTarget = '';
+        var self = this;
+        // 事件传播结束（含 main / window 的兜底判断）后复位标记
+        window.setTimeout(function () { self.fileDropHandled = false; }, 0);
+        // 按住 Shift / Alt 拖入 = 覆盖同名文档；默认只做新增，不覆盖已有内容。
+        var overwrite = !!(event.shiftKey || event.altKey);
+        var collected = collectDropPayload(dataTransfer);
+        var destination = targetPath || '';
+        this.fileDropBusy = true;
+        try {
+          var parts = await Promise.all(collected.entries.map(function (entry) {
+            return readDroppedEntry(entry, '');
+          }));
+          var files = [];
+          var skipped = 0;
+          var failed = 0;
+          parts.forEach(function (part) {
+            files = files.concat(part.files);
+            skipped += part.skipped;
+            failed += part.failed;
+          });
+          // 浏览器不支持 webkitGetAsEntry 时退回 dataTransfer.files（平铺，无子目录）
+          if (collected.files.length) {
+            var plain = await Promise.all(collected.files.map(function (file) {
+              if (!/\.md$/i.test(file.name)) {
+                skipped += 1;
+                return Promise.resolve(null);
+              }
+              return readFileAsText(file).then(function (text) {
+                return { path: file.name, content: text };
+              }, function () {
+                failed += 1;
+                return null;
+              });
+            }));
+            plain.forEach(function (item) { if (item) files.push(item); });
+          }
+          if (!files.length) {
+            this.notify(skipped
+              ? '拖入的内容里没有 .md 文件'
+              : '没有可导入的 Markdown 文件', 'error');
+            return;
+          }
+          if (files.length > 200) {
+            this.notify('单次最多导入 200 个文件，请分批拖入（当前 ' + files.length + ' 个）', 'error');
+            return;
+          }
+          var result = await api('POST', '/api/import', {
+            target_dir: destination,
+            files: files,
+            overwrite: overwrite
+          });
+          await this.refreshTree();
+          var message = '已拖入 ' + result.count + ' 篇到 ' + (destination || 'data/ 顶层');
+          if (result.skipped_count) {
+            message += '，跳过同名 ' + result.skipped_count
+              + (overwrite ? '' : '（按住 Shift 拖入可覆盖）');
+          }
+          if (result.error_count) message += '，失败 ' + result.error_count;
+          if (skipped) message += '，忽略非 .md ' + skipped + ' 个';
+          this.notify(message, result.error_count ? 'error' : 'success');
+        } catch (error) {
+          this.notify('拖入导入失败：' + error.message, 'error');
+        } finally {
+          this.fileDropBusy = false;
+        }
       },
 
       deleteFromMenu: async function (recursive) {

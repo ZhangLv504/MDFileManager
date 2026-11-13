@@ -42,7 +42,8 @@
     </div>
   </header>
 
-  <main class="main">
+  <main class="main" :class="{ 'file-dragging': fileDragActive }"
+    @dragover="onMainDragOver" @dragleave="onMainDragLeave" @drop.prevent="onMainDrop">
     <div class="notice" v-if="notice" :class="notice.type">{{ notice.text }}</div>
 
     <div class="cards-view" v-if="!currentPath && !activeDirPath">
@@ -61,7 +62,7 @@
       </div>
       <div class="cards">
         <section class="card" v-for="card in topCards" :key="card.path"
-          :class="{ 'card-active': selectedDir === card.path, 'drop-target': dropTarget === card.path, 'dragging': draggingPath === card.path }"
+          :class="{ 'card-active': selectedDir === card.path, 'drop-target': dropTarget === card.path, 'file-drop-active': fileDropTarget === card.path, 'dragging': draggingPath === card.path }"
           draggable="true"
           @dragstart="onDragStart($event, card.node)" @dragend="onDragEnd"
           @dragover.prevent="onDragOver($event, card.path)" @dragleave="onDragLeave(card.path)"
@@ -79,18 +80,18 @@
           <div class="card-foot">双击进入目录 →</div>
         </section>
       </div>
-      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里；删除先入回收站，可在顶栏还原。</div>
+      <div class="cards-tip">卡片只展示目录概要；子目录与文档在各自的目录页中查看。拖拽卡片可把整个目录移动到另一张卡片里；也可以直接把电脑里的 .md 文件或文件夹拖到卡片上导入。删除先入回收站，可在顶栏还原。</div>
     </div>
 
     <div class="dir-view" v-else-if="!currentPath">
       <div class="dir-head">
         <nav class="breadcrumb">
-          <button type="button" :class="{ 'drop-target': dropTarget === '' }"
+          <button type="button" :class="{ 'drop-target': dropTarget === '', 'file-drop-active': fileDropTarget === '' }"
             @dragover.prevent="onDragOver($event, '')" @dragleave="onDragLeave('')"
             @drop.prevent="onDrop($event, '')" @click="goToCards">文档库</button>
           <template v-for="crumb in breadcrumbs" :key="crumb.path">
             <span class="crumb-sep">/</span>
-            <button type="button" :class="{ 'drop-target': dropTarget === crumb.path }"
+            <button type="button" :class="{ 'drop-target': dropTarget === crumb.path, 'file-drop-active': fileDropTarget === crumb.path }"
               @dragover.prevent="onDragOver($event, crumb.path)" @dragleave="onDragLeave(crumb.path)"
               @drop.prevent="onDrop($event, crumb.path)" @click="openDir(crumb.path)">{{ crumb.name }}</button>
           </template>
@@ -118,7 +119,7 @@
         <h3>文件夹</h3>
         <div class="tiles">
           <div class="tile dir-tile" v-for="item in activeDirs" :key="item.path"
-            :class="{ 'tile-active': selectedDir === item.path, 'drop-target': dropTarget === item.path, 'dragging': draggingPath === item.path }"
+            :class="{ 'tile-active': selectedDir === item.path, 'drop-target': dropTarget === item.path, 'file-drop-active': fileDropTarget === item.path, 'dragging': draggingPath === item.path }"
             draggable="true"
             @dragstart="onDragStart($event, item)" @dragend="onDragEnd"
             @dragover.prevent="onDragOver($event, item.path)" @dragleave="onDragLeave(item.path)"
@@ -135,8 +136,10 @@
         <h3>文档</h3>
         <div class="tiles">
           <div class="tile doc-tile" v-for="item in activeFiles" :key="item.path"
-            :class="{ 'dragging': draggingPath === item.path }" draggable="true"
+            :class="{ 'dragging': draggingPath === item.path, 'file-drop-active': fileDropTarget === activeDirPath }" draggable="true"
             @dragstart="onDragStart($event, item)" @dragend="onDragEnd"
+            @dragover.prevent="onDragOver($event, activeDirPath)" @dragleave="onDragLeave(activeDirPath)"
+            @drop.prevent="onDrop($event, activeDirPath)"
             @click="selectDoc(item.path)" @contextmenu.prevent="openContextMenu($event, item)">
             <span class="tile-icon">·</span>
             <span class="tile-name" :title="item.path">{{ item.name }}</span>
@@ -146,7 +149,7 @@
       </section>
 
       <div class="dir-empty" v-if="!activeDirs.length && !activeFiles.length">目录为空，选中它后可新建子目录或文档。</div>
-      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；拖拽条目到文件夹、面包屑或上方区域即可移动；右键可重命名、移动或删除（先进回收站，可还原）。</div>
+      <div class="cards-tip">双击文件夹进入下一级；单击文档即可打开；拖拽条目到文件夹、面包屑或上方区域即可移动；右键可重命名、移动或删除（先进回收站，可还原）。把电脑里的 .md 文件拖到文件夹或页面空白处可直接导入到这里。</div>
     </div>
 
     <div class="editor-split" v-else-if="editing">
@@ -189,6 +192,11 @@
       </div>
     </div>
   </main>
+
+  <div class="file-drop-hint" v-if="fileDragActive || fileDropBusy">
+    <strong>{{ fileDropBusy ? '正在导入拖入的文件…' : '松开即可导入 .md 文件' }}</strong>
+    <span v-if="!fileDropBusy">目标：{{ fileDropLabel }} · 按住 Shift 覆盖同名文档</span>
+  </div>
 
   <div class="context-menu" v-if="contextMenu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" @click.stop>
     <div class="ctx-title">{{ contextMenu.node.name }}</div>
