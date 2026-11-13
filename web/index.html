@@ -35,6 +35,7 @@
       <button class="btn" @click="openTrash" title="删除的文档与目录会先移入回收站，可还原">回收站<span class="trash-badge" v-if="trashCount">{{ trashCount }}</span></button>
       <button class="btn" :disabled="!currentPath" @click="openHistory" title="查看当前文档的保存历史并还原旧版本">历史</button>
       <button class="btn" @click="openNewDialog" title="未选中目录时创建顶层目录；选中目录后可创建子目录或 .md 文档">新建</button>
+      <button class="btn" :class="{ active: showToc && !editing }" :disabled="!currentPath || editing" @click="toggleToc" title="显示或隐藏左侧文档目录（大纲）">目录</button>
       <button class="btn" :disabled="!currentPath" @click="toggleEdit">{{ editing ? '预览' : '编辑' }}</button>
       <button class="btn primary" :disabled="!currentPath || saving" @click="saveDoc">{{ saving ? '保存中…' : '保存' }}<kbd>Ctrl+S</kbd></button>
       <button class="btn danger" :disabled="!currentPath" @click="deleteDoc">删除</button>
@@ -159,8 +160,27 @@
       </section>
     </div>
 
-    <div class="viewer" v-else>
-      <article class="markdown-body" v-html="renderedHtml"></article>
+    <div class="doc-split" v-else>
+      <div class="toc-mask" v-if="showToc" @click="closeToc"></div>
+      <aside class="doc-toc" v-if="showToc">
+        <div class="toc-head">
+          <span class="toc-title">目录<span class="toc-count" v-if="docOutline.length">{{ docOutline.length }}</span></span>
+          <button type="button" class="toc-close" title="隐藏目录" @click="toggleToc">×</button>
+        </div>
+        <nav class="toc-list" ref="tocList">
+          <button type="button" v-for="item in docOutline" :key="item.id"
+            class="toc-item" :class="['depth-' + item.depth, { active: activeHeading === item.id }]"
+            :title="item.text" @click="scrollToHeading(item.id)">
+            <span class="toc-text">{{ item.text }}</span>
+          </button>
+          <div class="toc-empty" v-if="!docOutline.length">
+            这篇文档还没有标题。<br>用 <code>#</code> 或 <code>##</code> 标记标题后，这里会自动生成目录。
+          </div>
+        </nav>
+      </aside>
+      <div class="viewer" ref="viewerScroll" @scroll="onViewerScroll">
+        <article class="markdown-body" v-html="renderedHtml"></article>
+      </div>
     </div>
   </main>
 

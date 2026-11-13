@@ -1,6 +1,6 @@
 # 项目进度与架构契约
 
-> 状态：阶段一～十三均已完成并通过验证；十三个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`。
+> 状态：阶段一～十四均已完成并通过验证；十四个分支依次为 `stage-1-backend`、`stage-2-frontend`、`stage-3-render-enhancement`、`stage-4-dir-management`、`stage-5-cards-rename`、`stage-6-card-only`、`stage-7-dir-page`、`stage-8-content-ops`、`stage-9-content-organize`、`stage-10-recycle-bin`、`stage-11-version-history`、`stage-12-diff-restore`、`stage-13-import-search`、`stage-14-doc-toc`。
 
 ## 核心需求与阶段划分
 
@@ -90,6 +90,16 @@
   - 前端顶栏加搜索框（范围自动取 `activeDirPath` / 文档父目录 / 整个 `data/`）与结果面板（关键词用 `<mark>` 高亮，点击文件名直接打开文档）；顶栏「导入」打开对话框，可选目标目录、覆盖开关、预览已选文件并展示导入结果。
 - **输出**：`main.py` 两个新接口、前端导入与搜索界面、四套验证脚本扩充。未引入新第三方库。
 
+### 阶段十四：阅读视图左侧文档目录
+- **目标**：用户要求「单击 md 文件显示其内容后，默认左侧要显示目录」——打开文档即可看到全文大纲，并支持点击跳转。
+- **机制**：
+  - marked v12 起不再为标题生成 `id`，因此前端新增 `buildOutline()`：在 `renderMarkdown()`（marked + DOMPurify）之后解析一次 DOM，为 `h1`～`h6` 补上稳定锚点（`slugifyHeading` 保留中英文与数字，重名自动加序号），同时抽取目录条目并做层级归一化（最浅标题为根，最多缩进 3 级）。`renderedDoc` / `renderedHtml` / `docOutline` 三者共享同一次计算，编辑时实时预览同样不会重复解析。
+  - 阅读视图由单一 `.viewer` 改为 `.doc-split`：左侧 `aside.doc-toc`（宽度 250px，含标题计数与收起按钮）+ 右侧可滚动正文；目录默认展开，用户收起的选择记在 `localStorage` 的 `mdfm:toc-visible`。无标题文档给出「用 `#` 补充标题」的空状态提示。
+  - 顶栏新增「目录」开关（阅读态可用，激活时高亮），与面板内的 `×` 双向同步。
+  - 滚动正文时用 `requestAnimationFrame` 节流计算当前标题位置，目录对应条目实时高亮；点击条目用 `scrollTo`（平滑）跳到对应锚点，切换文档或从编辑返回阅读时正文与目录都回到顶部。
+  - 窄屏（≤900px）目录自动变为带半透明遮罩的浮层，点遮罩、`×` 或任一目录条目即收起，避免挤压正文；目录条目最多收录 300 条，防止超长文档拖慢渲染。
+- **输出**：纯前端改动（`web/index.html`、`web/app.js`、`web/style.css`），后端零改动，无新增第三方库；新增 `tests/stage14_toc_test.py`。
+
 ## 阶段交付契约
 
 1. **接口先行**：必须先完成阶段一，确保能够通过 API 正确读写本地硬盘上的 MD 文件后，再进行界面的开发。
@@ -143,6 +153,10 @@
 - `POST /api/import` 批量导入本机文件 / 文件夹（含子目录、同名跳过或覆盖、逐条安全校验）；`GET /api/search` 递归搜索当前目录并输出文件、位置与命中行；FastAPI 版本 1.7.0。
 - 四套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**。
 
+### 阶段十四 · 阅读视图左侧目录（`stage-14-doc-toc`）
+- 标题自动注入稳定 id，阅读视图左侧默认展示目录大纲（层级缩进、点击跳转、滚动高亮、可收起并记忆），窄屏转为浮层；后端零改动，FastAPI 版本仍为 1.7.0。
+- 五套验证全绿：`tests/smoke_test.py` **155/155**、`tests/frontend_smoke_test.py` **82/82**、`tests/browser_smoke_test.py` **36/36**、`tests/stage5_smoke_test.py` **81/81**、`tests/stage14_toc_test.py` **28/28**。
+
 ### 运行方式
 
 ```bash
@@ -158,6 +172,7 @@ py -3.12 -m venv .venv
 .venv/Scripts/python.exe tests/frontend_smoke_test.py
 .venv/Scripts/python.exe tests/browser_smoke_test.py
 .venv/Scripts/python.exe tests/stage5_smoke_test.py
+.venv/Scripts/python.exe tests/stage14_toc_test.py
 ```
 
 ## 当前能力边界
@@ -167,6 +182,7 @@ py -3.12 -m venv .venv
 - 删除先进回收站，可还原到原位置或指定目录；**仅「彻底删除」与「清空回收站」不可恢复**。递归删除不跟随符号链接、单次上限 2000 项，回收站上限 500 条；目标同名返回 409。
 - 版本历史按文档路径归档，重命名 / 移动 / 从回收站定向还原都会迁移；整目录递归删除后若不走回收站还原，其下文档的旧历史仅保留旧路径记录。差异为 `difflib` 逐行对比，单侧上限 3000 行；每篇最多 50 版，全局 500 篇 / 50 MB。
 - 导入只接受浏览器给出的相对文件名，服务端不读取任意系统路径；搜索为大小写不敏感的子串匹配，不做分词 / 正则 / 语义检索，也不索引隐藏文件。两者均有硬上限并在结果中提示截断。
-- 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。
+- 界面无树形侧栏：一级卡片只作入口，层级浏览靠双击进入目录页，返回用顶栏「← 返回」或面包屑。阅读视图左侧默认显示当前文档的标题目录，可收起（偏好存于浏览器本地），编辑视图（源码 + 实时预览）不显示目录。
+- 目录只收 `#` 标题，最深支持 4 级缩进、最多 300 条；标题里含公式时目录显示原始 Markdown 文本；文档没有标题时给出提示而不隐藏面板。
 - 浏览器验证依赖系统安装 Chrome / Edge（不下载浏览器）；未安装时对应脚本跳过或失败，其余脚本不受影响。
 - 未涉及多用户、权限与移动端适配；文档版本历史已在阶段十一补齐（同名覆盖即生成一个新版本）。

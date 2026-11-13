@@ -29,6 +29,65 @@
     return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
   }
 
+  // 目录（TOC）最多收录的标题数量，避免超长文档拖慢渲染。
+  var MAX_OUTLINE_ITEMS = 300;
+
+  function slugifyHeading(text) {
+    return String(text)
+      .trim()
+      .toLowerCase()
+      .replace(/[\s\u3000]+/g, '-')
+      .replace(/[^\w\u4e00-\u9fa5-]/g, '')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  /* 给渲染后的每个标题补上稳定 id，并抽取目录条目。
+   * marked v12 起不再生成 heading id，这里统一补，保证目录跳转与高亮可用。
+   * 返回 { html, headings: [{ id, level, depth, text }] }。 */
+  function buildOutline(html) {
+    var holder = document.createElement('div');
+    holder.innerHTML = html || '';
+    var nodes = holder.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    var used = Object.create(null);
+    var headings = [];
+    Array.prototype.forEach.call(nodes, function (node) {
+      if (headings.length >= MAX_OUTLINE_ITEMS) return;
+      var text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) return;
+      var base = slugifyHeading(text) || 'section';
+      var id = base;
+      var seq = 2;
+      while (used[id]) { id = base + '-' + seq; seq += 1; }
+      used[id] = true;
+      node.setAttribute('id', id);
+      headings.push({ id: id, level: Number(node.tagName.charAt(1)), depth: 0, text: text });
+    });
+    if (headings.length) {
+      var minLevel = headings.reduce(function (low, item) {
+        return item.level < low ? item.level : low;
+      }, 6);
+      headings.forEach(function (item) {
+        // 层级归一化：最浅标题作为根，最多缩进 3 级。
+        item.depth = Math.min(Math.max(item.level - minLevel, 0), 3);
+      });
+    }
+    return { html: holder.innerHTML, headings: headings };
+  }
+
+  function readTocVisible() {
+    try {
+      var saved = window.localStorage.getItem('mdfm:toc-visible');
+      return saved === null ? true : saved === '1';
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function saveTocVisible(visible) {
+    try { window.localStorage.setItem('mdfm:toc-visible', visible ? '1' : '0'); } catch (error) { /* 隐私模式忽略 */ }
+  }
+
   function highlightAll() {
     if (!window.hljs) return;
     document.querySelectorAll('.markdown-body pre code').forEach(function (block) {
@@ -116,6 +175,10 @@
         original: '',
         editing: false,
         saving: false,
+        // 左侧文档目录：默认展开，用户收起后的选择记在 localStorage。
+        showToc: readTocVisible(),
+        activeHeading: '',
+        tocScrollTick: false,
         backendOk: false,
         notice: null,
         showNew: false,
@@ -171,7 +234,9 @@
     },
 
     computed: {
-      renderedHtml: function () { return renderMarkdown(this.content); },
+      renderedDoc: function () { return buildOutline(renderMarkdown(this.content)); },
+      renderedHtml: function () { return this.renderedDoc.html; },
+      docOutline: function () { return this.renderedDoc.headings; },
       dirty: function () { return this.content !== this.original; },
       docCount: function () { return countFiles(this.tree); },
       topCards: function () {
@@ -295,8 +360,22 @@
     },
 
     watch: {
-      renderedHtml: function () { Vue.nextTick(decorate); },
-      editing: function () { Vue.nextTick(decorate); },
+      renderedHtml: function () {
+        this.activeHeading = '';
+        Vue.nextTick(decorate);
+      },
+      editing: function (isEditing) {
+        var self = this;
+        Vue.nextTick(decorate);
+        if (!isEditing) {
+          // 从编辑切回阅读时回到顶部，目录高亮重新按视口计算。
+          this.activeHeading = '';
+          Vue.nextTick(function () {
+            var container = self.$refs.viewerScroll;
+            if (container) container.scrollTop = 0;
+          });
+        }
+      },
       currentPath: function () {
         if (this.showHistory && this.currentPath !== this.historyPath) {
           this.showHistory = false;
@@ -1043,6 +1122,68 @@
         return window.confirm('当前文档有未保存的修改，确定放弃吗？');
       },
 
+      toggleToc: function () {
+        this.showToc = !this.showToc;
+        saveTocVisible(this.showToc);
+        if (this.showToc) this.refreshActiveHeading();
+      },
+
+      // 窄屏浮层的临时关闭：不写入偏好，下次仍按用户设置展示。
+      closeToc: function () {
+        if (window.innerWidth <= 900) this.showToc = false;
+      },
+
+      scrollToHeading: function (headingId) {
+        var container = this.$refs.viewerScroll;
+        if (!container) return;
+        var node = container.querySelector('[id="' + headingId + '"]');
+        if (!node) return;
+        var offset = node.getBoundingClientRect().top
+          - container.getBoundingClientRect().top + container.scrollTop - 12;
+        try {
+          container.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
+        } catch (error) {
+          container.scrollTop = Math.max(0, offset);
+        }
+        this.activeHeading = headingId;
+        // 窄屏下目录是浮层，点完就收起，避免遮住正文。
+        if (window.innerWidth <= 900) this.showToc = false;
+      },
+
+      refreshActiveHeading: function () {
+        var container = this.$refs.viewerScroll;
+        if (!container) return;
+        this.highlightHeadingAt(container);
+      },
+
+      highlightHeadingAt: function (container) {
+        if (!this.docOutline.length) {
+          if (this.activeHeading) this.activeHeading = '';
+          return;
+        }
+        var threshold = container.getBoundingClientRect().top + 90;
+        var current = '';
+        for (var i = 0; i < this.docOutline.length; i += 1) {
+          var node = container.querySelector('[id="' + this.docOutline[i].id + '"]');
+          if (!node) continue;
+          if (node.getBoundingClientRect().top <= threshold) current = this.docOutline[i].id;
+          else break;
+        }
+        if (this.activeHeading !== current) this.activeHeading = current;
+      },
+
+      // 滚动正文时同步目录高亮，用 rAF 节流避免高频 layout 查询。
+      onViewerScroll: function (event) {
+        var container = event.target;
+        if (!container || this.tocScrollTick) return;
+        var self = this;
+        this.tocScrollTick = true;
+        window.requestAnimationFrame(function () {
+          self.tocScrollTick = false;
+          self.highlightHeadingAt(container);
+        });
+      },
+
       selectDoc: async function (path) {
         if (path === this.currentPath) return;
         if (!this.confirmDiscard()) return;
@@ -1052,6 +1193,14 @@
           this.content = data.content;
           this.original = data.content;
           this.editing = false;
+          this.activeHeading = '';
+          var self = this;
+          Vue.nextTick(function () {
+            var container = self.$refs.viewerScroll;
+            if (container) container.scrollTop = 0;
+            var tocList = self.$refs.tocList;
+            if (tocList) tocList.scrollTop = 0;
+          });
           setHash('doc', data.path);
         } catch (error) {
           this.notify('读取失败：' + error.message, 'error');

@@ -11,7 +11,7 @@ import re
 import shutil
 from pathlib import Path
 
-MARKERS = ("__smoke__", "__frontend__", "__browser__", "__stage5__")
+MARKERS = ("__smoke__", "__frontend__", "__browser__", "__stage5__", "__stage14__")
 
 
 def cleanup_test_trash(base_dir: Path) -> int:
